@@ -61,6 +61,20 @@
     cv mode/.is if=worksheet@cvmode,
 }
 
+% Allow overriding cv mode from the command line, e.g.
+%   latexmk -pdf -usepretex='\def\WSCVMode{0}' demo.tex
+% Applied at \begin{document} so it wins over any \WorksheetSetup{cv mode=...}
+% already given in the source file.
+\AtBeginDocument{%
+    \ifdefined\WSCVMode
+        \ifnum\WSCVMode=1
+            \worksheet@cvmodetrue
+        \else
+            \worksheet@cvmodefalse
+        \fi
+    \fi
+}
+
 \newcommand{\WorksheetSetup}[1]{%
     \pgfkeys{/worksheet,#1}
 }
