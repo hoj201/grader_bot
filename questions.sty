@@ -1,0 +1,83 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{questions}[2026/07/08 Question macros]
+
+\RequirePackage{xparse}
+\RequirePackage{tikz}
+\RequirePackage{xcolor}
+\RequirePackage{worksheet}
+
+\makeatletter
+
+%============================================================
+% Configuration
+%============================================================
+
+\def\questions@answerwidth{1.25in}
+\def\questions@answerheight{0.35in}
+\def\questions@cvcolor{red}
+\def\questions@linewidth{0.5pt}
+\def\questions@cvlinewidth{2pt}
+
+\pgfkeys{
+    /questions/.is family,
+    /questions,
+    answer width/.store in=\questions@answerwidth,
+    answer height/.store in=\questions@answerheight,
+    cv color/.store in=\questions@cvcolor,
+    line width/.store in=\questions@linewidth,
+    cv line width/.store in=\questions@cvlinewidth,
+}
+
+\newcommand{\QuestionSetup}[1]{%
+    \pgfkeys{/questions,#1}
+}
+
+%============================================================
+% Internal answer box
+%============================================================
+
+\newcommand{\questions@AnswerBox}[1]{%
+\tikz[baseline=-0.6ex]{
+
+    \ifworksheet@cvmode
+
+        \draw[
+            draw=\questions@cvcolor,
+            line width=\questions@cvlinewidth
+        ]
+        (0,0)
+        rectangle
+        (\questions@answerwidth,\questions@answerheight);
+
+        \node[
+            font=\tiny,
+            text=\questions@cvcolor
+        ]
+        at
+        (.5*\questions@answerwidth,.5*\questions@answerheight)
+        {#1};
+
+    \else
+
+        \draw[
+            line width=\questions@linewidth
+        ]
+        (0,0)
+        rectangle
+        (\questions@answerwidth,\questions@answerheight);
+
+    \fi
+}
+}
+
+%============================================================
+% Public question macro
+%============================================================
+
+\NewDocumentCommand{\Question}{m m}{%
+    #2\hspace{0.3em}\questions@AnswerBox{#1}
+}
+
+\makeatother
+
+\endinput

@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "pencilbot"
+version = "0.1.0"
+description = ""
+authors = ["hoj201 <hoj201@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+opencv-python = "^5.0.0.93"
+numpy = "^2.5.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,144 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{worksheet}[2026/07/08 Worksheet Layout]
+
+% ============================================================
+% Required packages
+% ============================================================
+
+\RequirePackage[
+    letterpaper,
+    margin=0.75in
+]{geometry}
+
+\RequirePackage{graphicx}
+\RequirePackage{tikz}
+\RequirePackage{tikzpagenodes}
+\RequirePackage{xcolor}
+\RequirePackage{calc}
+
+\usetikzlibrary{calc}
+
+\pagestyle{empty}
+
+% ============================================================
+% Internal configuration
+% ============================================================
+
+\makeatletter
+
+\def\worksheet@markersize{0.75in}
+\def\worksheet@markerinset{0.15in}
+\def\worksheet@markerdirectory{aruco_images}
+\def\worksheet@frameinset{0.85in}
+
+\def\worksheet@markerTL{0}
+\def\worksheet@markerTR{1}
+\def\worksheet@markerBL{2}
+\def\worksheet@markerBR{3}
+
+\newif\ifworksheet@frame
+\worksheet@framefalse
+
+\newif\ifworksheet@cvmode
+\worksheet@cvmodefalse
+
+% ============================================================
+% Configuration interface
+% ============================================================
+
+\pgfkeys{
+    /worksheet/.is family,
+    /worksheet,
+    marker size/.store in=\worksheet@markersize,
+    marker inset/.store in=\worksheet@markerinset,
+    marker directory/.store in=\worksheet@markerdirectory,
+    frame inset/.store in=\worksheet@frameinset,
+    top left marker/.store in=\worksheet@markerTL,
+    top right marker/.store in=\worksheet@markerTR,
+    bottom left marker/.store in=\worksheet@markerBL,
+    bottom right marker/.store in=\worksheet@markerBR,
+    show frame/.is if=worksheet@frame,
+    cv mode/.is if=worksheet@cvmode,
+}
+
+\newcommand{\WorksheetSetup}[1]{%
+    \pgfkeys{/worksheet,#1}
+}
+
+% ============================================================
+% Internal helper
+% ============================================================
+
+\newcommand{\worksheet@PlaceMarker}[3]{%
+    \node[
+        anchor=#1,
+        inner sep=0pt
+    ] at #2
+    {
+        \includegraphics[
+            width=\worksheet@markersize,
+            height=\worksheet@markersize
+        ]
+        {\worksheet@markerdirectory/aruco_#3}
+    };
+}
+
+% ============================================================
+% Draw registration markers
+% ============================================================
+
+\newcommand{\WorksheetMarkers}{%
+\begin{tikzpicture}[remember picture,overlay]
+
+    \ifworksheet@frame
+        \draw[line width=0.5pt]
+            ($(current page.north west)+(\worksheet@frameinset,-\worksheet@frameinset)$)
+            rectangle
+            ($(current page.south east)+(-\worksheet@frameinset,\worksheet@frameinset)$);
+    \fi
+
+    \worksheet@PlaceMarker
+        {north west}
+        {($(current page.north west)+(\worksheet@markerinset,-\worksheet@markerinset)$)}
+        {\worksheet@markerTL}
+
+    \worksheet@PlaceMarker
+        {north east}
+        {($(current page.north east)+(-\worksheet@markerinset,-\worksheet@markerinset)$)}
+        {\worksheet@markerTR}
+
+    \worksheet@PlaceMarker
+        {south west}
+        {($(current page.south west)+(\worksheet@markerinset,\worksheet@markerinset)$)}
+        {\worksheet@markerBL}
+
+    \worksheet@PlaceMarker
+        {south east}
+        {($(current page.south east)+(-\worksheet@markerinset,\worksheet@markerinset)$)}
+        {\worksheet@markerBR}
+
+\end{tikzpicture}
+}
+
+% ============================================================
+% Worksheet header
+% ============================================================
+
+\newcommand{\WorksheetHeader}{%
+
+\WorksheetMarkers
+
+\vspace*{0.5in}
+
+\noindent
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ll}
+\textbf{Name:} & \textbf{Date:}\\
+\hrulefill & \hrulefill
+\end{tabular*}
+
+\vspace{0.25in}
+}
+
+\makeatother
+
+\endinput
