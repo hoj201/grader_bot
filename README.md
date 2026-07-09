@@ -21,11 +21,22 @@ latexmk -pdf -usepretex='\def\WSCVMode{0}' demo.tex
 for `cv mode = false`.  For `cv mode = true` just change the 0 into a 1 in the above command.
 
 
+## Sythesizing Student Work
+The [worksheet_synth](./worksheet_synth.py) python module is for making synthetic images of student work.  It can compile latex, fill in answer boxes, and add noise and perspective skewing.  This is primarily useful for making unit-tests for pencil bot, which is concerned primarily with inverting the `worksheet_synth` module.  Here is an example code-snippet
+
+```python
+import cv2
+from worksheet_synth import fill_worksheet, perspective_skew_image, add_image_noise
+import numpy as np
+
+filled = fill_worksheet('demo.tex', {'add001': '12', 'sub001': r'\frac{3}{5}'})
+skewed = perspective_skew_image(filled, max_skew=0.02, rng=np.random.default_rng(42))
+noisy = add_image_noise(skewed, noise_level=0.05, rng=np.random.default_rng(7))
+cv2.imwrite('output_filename.png', noisy)
+```
+
 # Tasks
 Work on tasks in the order given
-
-## Work on the `worksheet_synth` module
-In the worksheet synth module there a number of empty routines to fill in.  Fill as much as you can.  Synthesizeing fractions might not be too easy.  If this is hard you will need to stop by the library and (shudder) actually print stuff.
 
 ## Create `read_box` function
 We will need a funciton with a signature like

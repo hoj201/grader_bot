@@ -99,10 +99,32 @@ def perspective_skew_image(
     )
 
 
-def add_image_noise(image):
+def add_image_noise(
+    image: np.ndarray,
+    noise_level: float = 0.05,
+    rng: np.random.Generator = None,
+) -> np.ndarray:
     """Applies some noise to simulate dust, stains, and mediocre
-    lighting on an image"""
-    raise NotImplementedError
+    lighting on a copy of `image`. `noise_level` (0-1) scales both
+    per-pixel Gaussian grain and a smooth multiplicative lighting
+    vignette centered at a random point. `image` is left unmodified."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    height, width = image.shape[:2]
+
+    gaussian_std = noise_level * 255
+    noisy = image.astype(np.float32) + rng.normal(0, gaussian_std, image.shape)
+
+    center_x = width * rng.uniform(0.3, 0.7)
+    center_y = height * rng.uniform(0.3, 0.7)
+    y, x = np.mgrid[0:height, 0:width]
+    max_dist = np.hypot(max(center_x, width - center_x), max(center_y, height - center_y))
+    dist = np.hypot(x - center_x, y - center_y) / max_dist
+    vignette = (1 - noise_level * dist)[..., None]
+    noisy *= vignette
+
+    return np.clip(noisy, 0, 255).astype(np.uint8)
 
 
 def _box_to_pixels(box, image_width: int, image_height: int) -> Tuple[int, int, int, int]:
