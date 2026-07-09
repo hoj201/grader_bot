@@ -3,7 +3,8 @@ from pathlib import Path
 import fitz
 import numpy as np
 
-from worksheet_synth import latexmk_worksheet, write_on_image
+from pencilbot import extract_answer_boxes
+from worksheet_synth import fill_worksheet, latexmk_worksheet, write_on_image
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "HomemadeApple-Regular.ttf"
@@ -36,3 +37,40 @@ def test_write_on_image_draws_text_without_mutating_input():
     assert blank.tolist() == original.tolist()
     assert result.shape == blank.shape
     assert not np.array_equal(result, blank)
+
+
+def _box_region(image: np.ndarray, box) -> np.ndarray:
+    height, width = image.shape[:2]
+    x0 = int(box.x_lower_left * width)
+    x1 = int((box.x_lower_left + box.width) * width)
+    y1 = int((1 - box.y_lower_left) * height)
+    y0 = int(y1 - box.height * height)
+    return image[y0:y1, x0:x1]
+
+
+def test_fill_worksheet_draws_plain_answer_into_its_box():
+    filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
+
+    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
+    boxes = extract_answer_boxes(cv_worksheet)
+
+    filled_region = _box_region(filled, boxes["add001"])
+    assert not np.all(filled_region == 255)
+
+
+def test_fill_worksheet_draws_fraction_into_its_box():
+    filled = fill_worksheet(str(DEMO_TEX), {"sub001": r"\frac{3}{5}"})
+
+    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
+    boxes = extract_answer_boxes(cv_worksheet)
+
+    filled_region = _box_region(filled, boxes["sub001"])
+    assert not np.all(filled_region == 255)
+
+
+def test_fill_worksheet_raises_on_unknown_question_id():
+    try:
+        fill_worksheet(str(DEMO_TEX), {"does_not_exist": "1"})
+    except KeyError:
+        return
+    raise AssertionError("Expected KeyError for unknown question id")

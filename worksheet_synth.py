@@ -5,13 +5,18 @@ The main impetus for this module is the creation of unit-tests
 for pencilbot.py
 """
 
+import re
 import subprocess
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+_DEFAULT_FONT = str(Path(__file__).parent / "fonts" / "HomemadeApple-Regular.ttf")
+_DEFAULT_TEXT_SIZE = 36
+_FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
 
 
 def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
@@ -75,14 +80,94 @@ def add_image_noise(image):
     raise NotImplementedError
 
 
-def fill_worksheet(tex_fn, answers):
-    cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
-    blank_workshet = latexmk_worksheet(tex_fn, cv_mode=False)
-    from pencilbot import extract_answer_boxes
-    boxes = extract_answer_boxes(cv_worksheet)
-    """At this point we should be able to use the 
-    boxes to know where to write our answers.
-    `answers` is a dictionary that maps question ids
-    to latex-code.
+def _box_to_pixels(box, image_width: int, image_height: int) -> Tuple[int, int, int, int]:
+    """Converts a `pencilbot.Box` (relative coordinates, origin at
+    bottom-left) into pixel (x0, y0, x1, y1) with origin at top-left."""
+    x0 = box.x_lower_left * image_width
+    x1 = (box.x_lower_left + box.width) * image_width
+    y1 = (1 - box.y_lower_left) * image_height
+    y0 = y1 - box.height * image_height
+    return int(x0), int(y0), int(x1), int(y1)
+
+
+def _text_metrics(text: str, font: str, text_size: int) -> Tuple[int, int, int, int]:
+    """Returns (width, height, left, top) of `text`'s tight glyph
+    bounding box, as reported by `ImageFont.getbbox`."""
+    pil_font = ImageFont.truetype(font, text_size)
+    left, top, right, bottom = pil_font.getbbox(text)
+    return right - left, bottom - top, left, top
+
+
+def _draw_text_centered_in(
+    image: np.ndarray,
+    text: str,
+    region: Tuple[int, int, int, int],
+    font: str,
+    text_size: int,
+) -> np.ndarray:
+    """Draws `text` so its tight glyph bounding box is centered within
+    pixel `region` = (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = region
+    width, height, left, top = _text_metrics(text, font, text_size)
+    target_x = x0 + max(((x1 - x0) - width) // 2, 0)
+    target_y = y0 + max(((y1 - y0) - height) // 2, 0)
+    return write_on_image(image, text, (target_x - left, target_y - top), text_size, font)
+
+
+def _draw_answer(
+    image: np.ndarray,
+    box_px: Tuple[int, int, int, int],
+    answer: str,
+    font: str,
+    text_size: int,
+) -> np.ndarray:
+    x0, y0, x1, y1 = box_px
+
+    frac_match = _FRAC_RE.fullmatch(answer.strip())
+    if frac_match:
+        numerator, denominator = frac_match.groups()
+        mid_y = y0 + (y1 - y0) // 2
+
+        image = _draw_text_centered_in(image, numerator, (x0, y0, x1, mid_y), font, text_size)
+        image = _draw_text_centered_in(image, denominator, (x0, mid_y, x1, y1), font, text_size)
+
+        num_w, _, _, _ = _text_metrics(numerator, font, text_size)
+        den_w, _, _, _ = _text_metrics(denominator, font, text_size)
+        line_width = max(num_w, den_w)
+        line_x0 = x0 + ((x1 - x0) - line_width) // 2
+        line_x1 = line_x0 + line_width
+        image = image.copy()
+        cv2.line(image, (line_x0, mid_y), (line_x1, mid_y), (0, 0, 0), 2)
+        return image
+
+    return _draw_text_centered_in(image, answer, (x0, y0, x1, y1), font, text_size)
+
+
+def fill_worksheet(
+    tex_fn: str,
+    answers: Dict[str, str],
+    font: str = _DEFAULT_FONT,
+    text_size: int = _DEFAULT_TEXT_SIZE,
+) -> np.ndarray:
+    """Renders the blank version of `tex_fn` and writes `answers` (a
+    dictionary mapping question ids to short LaTeX snippets, either a
+    plain number or a `\\frac{a}{b}`) into their corresponding answer
+    boxes, using the CV-mode render of the same worksheet to locate
+    those boxes. Returns the composited worksheet as a BGR numpy array.
     """
-    raise NotImplementedError
+    from pencilbot import extract_answer_boxes, render_pdf_page_image
+
+    cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
+    blank_worksheet = latexmk_worksheet(tex_fn, cv_mode=False)
+    boxes = extract_answer_boxes(cv_worksheet)
+
+    rgb_image = render_pdf_page_image(blank_worksheet)
+    image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+
+    for qid, answer in answers.items():
+        if qid not in boxes:
+            raise KeyError(f"No answer box found for question id {qid!r}")
+        box_px = _box_to_pixels(boxes[qid], image.shape[1], image.shape[0])
+        image = _draw_answer(image, box_px, answer, font, text_size)
+
+    return image

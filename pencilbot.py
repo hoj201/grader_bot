@@ -105,6 +105,18 @@ _REGISTRATION_MARKER_IDS = (_MARKER_ID_TL, _MARKER_ID_TR, _MARKER_ID_BL, _MARKER
 _WORKSHEET_RENDER_DPI = 150
 
 
+def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, page_index: int = 0) -> np.ndarray:
+    """Rasterizes a single page of `pdf_filename` at `dpi` and returns it
+    as an RGB numpy array."""
+    with fitz.open(pdf_filename) as doc:
+        page = doc[page_index]
+        zoom = dpi / 72
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        return np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+            pixmap.height, pixmap.width, pixmap.n
+        ).copy()
+
+
 def _detect_marker_centers(image, source_name: str) -> Dict[int, Tuple[float, float]]:
     detector = cv2.aruco.ArucoDetector(_ARUCO_DICTIONARY, cv2.aruco.DetectorParameters())
     corners, ids, _ = detector.detectMarkers(image)
@@ -131,11 +143,7 @@ def align_document_image(image_filename: str, worksheet_filename: str):
         page = doc[0]
         page_width_pt, page_height_pt = page.rect.width, page.rect.height
 
-        zoom = _WORKSHEET_RENDER_DPI / 72
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-        reference_image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
-            pixmap.height, pixmap.width, pixmap.n
-        )
+    reference_image = render_pdf_page_image(worksheet_filename)
 
     reference_centers = _detect_marker_centers(reference_image, worksheet_filename)
 
@@ -148,8 +156,9 @@ def align_document_image(image_filename: str, worksheet_filename: str):
     target_width = photo_width
     target_height = round(target_width * page_height_pt / page_width_pt)
 
-    scale_x = target_width / pixmap.width
-    scale_y = target_height / pixmap.height
+    pixmap_height, pixmap_width = reference_image.shape[:2]
+    scale_x = target_width / pixmap_width
+    scale_y = target_height / pixmap_height
 
     src_points = np.array(
         [photo_centers[m] for m in _REGISTRATION_MARKER_IDS], dtype=np.float32
