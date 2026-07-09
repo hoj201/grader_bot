@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, LiteralString
 
 from dataclasses import dataclass
 
@@ -15,10 +15,46 @@ class Box:
     width: float
     height: float
 
+@dataclass(frozen=True)
+class Score:
+    correct: int
+    attempted: int
+    total_questions: int
 
 _RED = (1, 0, 0)
 _RED_TOLERANCE = 0.15
 
+def grade_hw_stack(worksheet_fn: LiteralString, answer_key_fn: LiteralString, hws: List[LiteralString]) -> Dict[LiteralString, Score]:
+    boxes = extract_answer_boxes(worksheet_fn)
+    answer_key_fn = align_document_image(answer_key_fn, worksheet_fn)
+    answer_key = {qid: read_box(answer_key_fn, box) for qid, box in boxes.items()}
+    scores = dict()
+    for hw in hws:
+        name = extract_name(hw)
+        scores[name] = grade_hw(answer_key, boxes, hw)
+    return scores
+
+
+def extract_name(hw_fn: LiteralString) -> LiteralString:
+    """Reads the name field of a worksheet using OCR"""
+    raise NotImplementedError
+
+def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, LiteralString], hw_fn: LiteralString) -> Score:
+    responses = {qid: read_box(hw_fn, box) for qid, box in boxes.items()}
+    correct, attempted = 0,0
+    for qid, box in boxes.items():
+        response = read_box(hw_fn, box)
+        if response != "":
+            attempted += 1
+        answer = answer_key[qid]
+        if is_correct(response, answer):
+            correct += 1
+    return Score(correct=correct, attempted=attempted, total_questions=len(answer_key))
+
+def is_correct(response: LiteralString, answer: LiteralString) -> bool:
+    """Takes the LaTeX string for an answer and compares it to the submitted response by a student.
+    If the answers are equal it is marked as correct."""
+    raise NotImplementedError
 
 def _is_red(color) -> bool:
     if color is None or len(color) != 3:
@@ -58,11 +94,9 @@ def extract_answer_boxes(worksheet_filename: str) -> Dict[str, Box]:
 
     return boxes
 
-def read_answer_boxes(boxes: Dict[str, Box], image_filename):
-    """Reads the contents in all the boxes and returns a dictionary
-    that maps question ids to plain-text answers.
-    """
-    pass
+
+def read_box(image_fn: str, box: Box) -> str:
+    raise NotImplementedError
 
 
 _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
