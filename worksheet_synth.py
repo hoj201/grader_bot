@@ -5,14 +5,40 @@ The main impetus for this module is the creation of unit-tests
 for pencilbot.py
 """
 
+import subprocess
+from pathlib import Path
+
+
 def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
-    """This routine basically just runs the shell commands
-    latexmk -pdf -usepretex='\def\WSCVMode{0}' filename.tex 
+    r"""This routine basically just runs the shell commands
+    latexmk -pdf -usepretex='\def\WSCVMode{0}' filename.tex
     latexmk -c filename.tex
 
     then returns the path to the output pdf file.
     """
-    raise NotImplementedError
+    tex_path = Path(tex_filename).resolve()
+    cv_flag = "1" if cv_mode else "0"
+    outdir = tex_path.parent / ("build_cv" if cv_mode else "build_blank")
+    outdir.mkdir(exist_ok=True)
+
+    subprocess.run(
+        [
+            "latexmk",
+            "-pdf",
+            rf"-usepretex=\def\WSCVMode{{{cv_flag}}}",
+            f"-outdir={outdir}",
+            tex_path.name,
+        ],
+        cwd=tex_path.parent,
+        check=True,
+    )
+    subprocess.run(
+        ["latexmk", "-c", f"-outdir={outdir}", tex_path.name],
+        cwd=tex_path.parent,
+        check=True,
+    )
+
+    return str(outdir / (tex_path.stem + ".pdf"))
 
 
 def write_on_image(image, text_location, text_size, font):

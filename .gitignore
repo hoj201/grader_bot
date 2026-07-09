@@ -556,3 +556,7 @@ TSWLatexianTemp*
 #*Notes.bib
 
 claude.md
+
+# worksheet_synth.py latexmk_worksheet() output dirs
+build_cv/
+build_blank/
