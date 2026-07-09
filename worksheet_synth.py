@@ -69,9 +69,34 @@ def write_on_image(
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 
-def perspective_skew_image(image):
-    """Takes an image and applies a minor linear warping"""
-    raise NotImplementedError
+def perspective_skew_image(
+    image: np.ndarray,
+    max_skew: float = 0.02,
+    rng: np.random.Generator = None,
+) -> np.ndarray:
+    """Applies a minor random 4-corner perspective warp to a copy of
+    `image`, simulating a photo taken at a slight angle. Each corner is
+    nudged by up to `max_skew` (a fraction of image width/height) in a
+    random direction. Exposed border areas are filled white. `image` is
+    left unmodified."""
+    if rng is None:
+        rng = np.random.default_rng()
+
+    height, width = image.shape[:2]
+    src_corners = np.array(
+        [[0, 0], [width, 0], [0, height], [width, height]], dtype=np.float32
+    )
+    jitter = rng.uniform(-max_skew, max_skew, size=(4, 2)) * [width, height]
+    dst_corners = (src_corners + jitter).astype(np.float32)
+
+    homography = cv2.getPerspectiveTransform(src_corners, dst_corners)
+    return cv2.warpPerspective(
+        image,
+        homography,
+        (width, height),
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
 
 
 def add_image_noise(image):

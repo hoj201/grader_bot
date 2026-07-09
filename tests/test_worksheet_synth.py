@@ -4,7 +4,12 @@ import fitz
 import numpy as np
 
 from pencilbot import extract_answer_boxes
-from worksheet_synth import fill_worksheet, latexmk_worksheet, write_on_image
+from worksheet_synth import (
+    fill_worksheet,
+    latexmk_worksheet,
+    perspective_skew_image,
+    write_on_image,
+)
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "HomemadeApple-Regular.ttf"
@@ -37,6 +42,35 @@ def test_write_on_image_draws_text_without_mutating_input():
     assert blank.tolist() == original.tolist()
     assert result.shape == blank.shape
     assert not np.array_equal(result, blank)
+
+
+def test_perspective_skew_image_preserves_shape_without_mutating_input():
+    image = np.full((100, 300, 3), 255, dtype=np.uint8)
+    image[40:60, 100:200] = 0
+    original = image.copy()
+
+    result = perspective_skew_image(image, max_skew=0.05, rng=np.random.default_rng(0))
+
+    assert image.tolist() == original.tolist()
+    assert result.shape == image.shape
+
+
+def test_perspective_skew_image_changes_image():
+    image = np.full((100, 300, 3), 255, dtype=np.uint8)
+    image[40:60, 100:200] = 0
+
+    result = perspective_skew_image(image, max_skew=0.05, rng=np.random.default_rng(0))
+
+    assert not np.array_equal(result, image)
+
+
+def test_perspective_skew_image_is_identity_when_max_skew_is_zero():
+    image = np.full((100, 300, 3), 255, dtype=np.uint8)
+    image[40:60, 100:200] = 0
+
+    result = perspective_skew_image(image, max_skew=0.0, rng=np.random.default_rng(0))
+
+    assert np.array_equal(result, image)
 
 
 def _box_region(image: np.ndarray, box) -> np.ndarray:
