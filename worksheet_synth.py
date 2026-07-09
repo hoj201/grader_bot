@@ -7,6 +7,11 @@ for pencilbot.py
 
 import subprocess
 from pathlib import Path
+from typing import Tuple
+
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 
 def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
@@ -41,11 +46,22 @@ def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
     return str(outdir / (tex_path.stem + ".pdf"))
 
 
-def write_on_image(image, text_location, text_size, font):
-    """Takes in an image (perhaps as a fitz.Matrix)
-    and then writes on the image using a font that simulates
-    human hand-writing"""
-    raise NotImplementedError
+def write_on_image(
+    image: np.ndarray,
+    text: str,
+    text_location: Tuple[int, int],
+    text_size: int,
+    font: str,
+) -> np.ndarray:
+    """Draws `text` onto a copy of `image` (a BGR numpy array, e.g. from
+    cv2.imread) at pixel location `text_location`, using the
+    handwriting-style font at path `font` rendered at `text_size`
+    points. Returns a new numpy array; `image` is left unmodified."""
+    pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_image)
+    pil_font = ImageFont.truetype(font, text_size)
+    draw.text(text_location, text, font=pil_font, fill=(0, 0, 0))
+    return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 
 def perspective_skew_image(image):

@@ -9,6 +9,7 @@ readme = "README.md"
 python = "^3.13"
 numpy = "^2.5.1"
 pymupdf = "^1.28.0"
+pillow = "^12.3.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
