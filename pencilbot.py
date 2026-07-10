@@ -1,4 +1,6 @@
+import base64
 import os
+import re
 import tempfile
 from typing import Dict, Tuple, List, LiteralString
 
@@ -7,6 +9,10 @@ from dataclasses import dataclass
 import cv2
 import fitz
 import numpy as np
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 @dataclass(frozen=True)
 class Box:
@@ -95,8 +101,84 @@ def extract_answer_boxes(worksheet_filename: str) -> Dict[str, Box]:
     return boxes
 
 
+_MATHPIX_TEXT_URL = "https://api.mathpix.com/v3/text"
+# Fraction of the box's own width/height to inset the crop by, so the drawn
+# border itself is excluded. Including the border causes Mathpix to read the
+# box as an empty "checkbox" placeholder (`\square`) instead of OCR'ing its
+# contents.
+_BOX_INSET = 0.08
+_MATH_DELIMITER_PATTERN = re.compile(
+    r"^\s*(?:\$\$|\$|\\\(|\\\[)(.*?)(?:\$\$|\$|\\\)|\\\])\s*$", re.DOTALL
+)
+# Answers are always plain numbers or `\frac{a}{b}` - division is never
+# written with a slash. A stray "/" or "\" (not starting a LaTeX command
+# name) is therefore a misread of the numeral "1".
+_STRAY_SLASH_PATTERN = re.compile(r"[/\\](?![a-zA-Z])")
+
+
+def _load_image_rgb(image_fn: str) -> np.ndarray:
+    if os.path.splitext(image_fn)[1].lower() == ".pdf":
+        return render_pdf_page_image(image_fn)
+    image_bgr = cv2.imread(image_fn)
+    if image_bgr is None:
+        raise ValueError(f"Could not read image {image_fn}")
+    return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+
+
+def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
+    image_height, image_width = image.shape[:2]
+
+    left = box.x_lower_left + inset * box.width
+    right = box.x_lower_left + box.width - inset * box.width
+    top = 1 - box.y_lower_left - box.height + inset * box.height
+    bottom = 1 - box.y_lower_left - inset * box.height
+
+    x0, x1 = round(left * image_width), round(right * image_width)
+    y0, y1 = round(top * image_height), round(bottom * image_height)
+    return image[y0:y1, x0:x1]
+
+
+def _strip_math_delimiters(text: str) -> str:
+    match = _MATH_DELIMITER_PATTERN.match(text)
+    return match.group(1).strip() if match else text.strip()
+
+
+def _fix_stray_slashes(text: str) -> str:
+    return _STRAY_SLASH_PATTERN.sub("1", text)
+
+
+def _mathpix_ocr(image: np.ndarray) -> str:
+    app_id = os.environ.get("MATHPIX_APP_ID")
+    app_key = os.environ.get("MATHPIX_APP_KEY")
+    if not app_id or not app_key:
+        raise EnvironmentError(
+            "MATHPIX_APP_ID and MATHPIX_APP_KEY must be set (e.g. in a .env file) to use read_box"
+        )
+
+    success, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    if not success:
+        raise ValueError("Could not encode cropped box image")
+    data_uri = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+
+    response = requests.post(
+        _MATHPIX_TEXT_URL,
+        headers={
+            "app_id": app_id,
+            "app_key": app_key,
+            "Content-type": "application/json",
+        },
+        json={"src": data_uri, "formats": ["text"], "rm_spaces": True},
+    )
+    response.raise_for_status()
+    text = _strip_math_delimiters(response.json().get("text", ""))
+    return _fix_stray_slashes(text)
+
+
 def read_box(image_fn: str, box: Box) -> str:
-    raise NotImplementedError
+    """Reads the handwritten LaTeX answer inside `box` from `image_fn` (a PDF or raster image)."""
+    image = _load_image_rgb(image_fn)
+    cropped = _crop_box(image, box, _BOX_INSET)
+    return _mathpix_ocr(cropped)
 
 
 _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)

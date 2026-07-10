@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from pencilbot import align_document_image, extract_answer_boxes
+from pencilbot import align_document_image, extract_answer_boxes, read_box
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
 DEMO_ANSWER_KEY_PDF = Path(__file__).parent.parent / "demo_answer_key.pdf"
@@ -112,6 +113,16 @@ def test_extract_answer_boxes_coordinates_are_relative(demo_pdf):
 def test_extract_answer_boxes_sub001_is_below_add001(demo_pdf):
     boxes = extract_answer_boxes(str(demo_pdf))
     assert boxes["sub001"].y_lower_left < boxes["add001"].y_lower_left
+
+
+def test_read_box_reads_handwritten_answers(demo_pdf):
+    if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
+        pytest.skip("Mathpix credentials are not configured")
+
+    boxes = extract_answer_boxes(str(demo_pdf))
+
+    assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["add001"]) == "12"
+    assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["sub001"]) == "11"
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
