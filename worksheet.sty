@@ -36,6 +36,12 @@
 \def\worksheet@markerBL{2}
 \def\worksheet@markerBR{3}
 
+\def\worksheet@nameboxwidth{2.5in}
+\def\worksheet@nameboxheight{0.3in}
+\def\worksheet@namecvcolor{red}
+\def\worksheet@namecvlinewidth{2pt}
+\def\worksheet@namelinewidth{0.5pt}
+
 \newif\ifworksheet@frame
 \worksheet@framefalse
 
@@ -59,6 +65,9 @@
     bottom right marker/.store in=\worksheet@markerBR,
     show frame/.is if=worksheet@frame,
     cv mode/.is if=worksheet@cvmode,
+    name box width/.store in=\worksheet@nameboxwidth,
+    name box height/.store in=\worksheet@nameboxheight,
+    name cv color/.store in=\worksheet@namecvcolor,
 }
 
 % Allow overriding cv mode from the command line, e.g.
@@ -135,6 +144,44 @@
 }
 
 % ============================================================
+% Name box
+% ============================================================
+
+\newcommand{\worksheet@NameBox}{%
+\tikz[baseline=-0.6ex]{
+
+    \ifworksheet@cvmode
+
+        \draw[
+            draw=\worksheet@namecvcolor,
+            line width=\worksheet@namecvlinewidth
+        ]
+        (0,0)
+        rectangle
+        (\worksheet@nameboxwidth,\worksheet@nameboxheight);
+
+        \node[
+            font=\tiny,
+            text=\worksheet@namecvcolor
+        ]
+        at
+        (.5*\worksheet@nameboxwidth,.5*\worksheet@nameboxheight)
+        {name};
+
+    \else
+
+        \draw[
+            line width=\worksheet@namelinewidth
+        ]
+        (0,0)
+        rectangle
+        (\worksheet@nameboxwidth,\worksheet@nameboxheight);
+
+    \fi
+}
+}
+
+% ============================================================
 % Worksheet header
 % ============================================================
 
@@ -147,7 +194,7 @@
 \noindent
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ll}
 \textbf{Name:} & \textbf{Date:}\\
-\hrulefill & \hrulefill
+\worksheet@NameBox & \hrulefill
 \end{tabular*}
 
 \vspace{0.25in}

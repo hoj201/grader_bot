@@ -193,6 +193,7 @@ def _draw_answer(
 def fill_worksheet(
     tex_fn: str,
     answers: Dict[str, str],
+    student_name: str = None,
     font: str = _DEFAULT_FONT,
     text_size: int = _DEFAULT_TEXT_SIZE,
 ) -> np.ndarray:
@@ -200,7 +201,9 @@ def fill_worksheet(
     dictionary mapping question ids to short LaTeX snippets, either a
     plain number or a `\\frac{a}{b}`) into their corresponding answer
     boxes, using the CV-mode render of the same worksheet to locate
-    those boxes. Returns the composited worksheet as a BGR numpy array.
+    those boxes. If `student_name` is given, it is also written into
+    the worksheet's name box (id "name", drawn by \\WorksheetHeader).
+    Returns the composited worksheet as a BGR numpy array.
     """
     from pencilbot import extract_answer_boxes, render_pdf_page_image
 
@@ -211,7 +214,11 @@ def fill_worksheet(
     rgb_image = render_pdf_page_image(blank_worksheet)
     image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
 
-    for qid, answer in answers.items():
+    entries = dict(answers)
+    if student_name is not None:
+        entries["name"] = student_name
+
+    for qid, answer in entries.items():
         if qid not in boxes:
             raise KeyError(f"No answer box found for question id {qid!r}")
         box_px = _box_to_pixels(boxes[qid], image.shape[1], image.shape[0])

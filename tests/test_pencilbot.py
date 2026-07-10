@@ -97,7 +97,7 @@ def demo_pdf(tmp_path_factory):
 
 def test_extract_answer_boxes_finds_all_ids(demo_pdf):
     boxes = extract_answer_boxes(str(demo_pdf))
-    assert set(boxes) == {"add001", "sub001"}
+    assert set(boxes) == {"name", "add001", "sub001"}
 
 
 def test_extract_answer_boxes_coordinates_are_relative(demo_pdf):

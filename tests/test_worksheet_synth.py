@@ -132,6 +132,17 @@ def test_fill_worksheet_draws_fraction_into_its_box():
     assert not np.all(filled_region == 255)
 
 
+def test_fill_worksheet_draws_student_name_into_name_box():
+    filled = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
+
+    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
+    boxes = extract_answer_boxes(cv_worksheet)
+
+    assert "name" in boxes
+    filled_region = _box_region(filled, boxes["name"])
+    assert not np.all(filled_region == 255)
+
+
 def test_fill_worksheet_raises_on_unknown_question_id():
     try:
         fill_worksheet(str(DEMO_TEX), {"does_not_exist": "1"})
