@@ -38,8 +38,5 @@ cv2.imwrite('output_filename.png', noisy)
 # Tasks
 Work on tasks in the order given
 
-## Reduce the amount of times files are opened
-Currently we are using file-names to pass around images.  This is inefficient as we re-open the same file many times (particularly the answer key).  Consider passing around images as `fitz.Matrix` or something.  Discuss formats before proceeding with this task. 
-
 ## Log all call-reponses from mathpix
 We want to build a labelled training set so that someday we can build our own model, and not rely on mathpix.

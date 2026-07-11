@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from pencilbot import align_document_image, extract_answer_boxes, extract_name, is_correct, read_box
+from pencilbot import align_document_image, extract_answer_boxes, extract_name, is_correct, load_image_rgb, read_box
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
@@ -121,12 +121,13 @@ def test_read_box_reads_handwritten_answers(demo_pdf):
         pytest.skip("Mathpix credentials are not configured")
 
     boxes = extract_answer_boxes(str(demo_pdf))
+    answer_key_image = load_image_rgb(str(DEMO_ANSWER_KEY_PDF))
 
-    assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["add001"]) == "12"
-    assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["sub001"]) == "11"
+    assert read_box(answer_key_image, boxes["add001"]) == "12"
+    assert read_box(answer_key_image, boxes["sub001"]) == "11"
 
 
-def test_read_box_reads_a_handwritten_fraction(demo_pdf, tmp_path):
+def test_read_box_reads_a_handwritten_fraction(demo_pdf):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
     if shutil.which("latexmk") is None:
@@ -134,14 +135,13 @@ def test_read_box_reads_a_handwritten_fraction(demo_pdf, tmp_path):
 
     boxes = extract_answer_boxes(str(demo_pdf))
 
-    filled_image = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})
-    filled_fn = tmp_path / "filled_frac.png"
-    cv2.imwrite(str(filled_fn), filled_image)
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})
+    filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
-    assert read_box(str(filled_fn), boxes["frac001"]) == r"\frac{3}{4}"
+    assert read_box(filled_image, boxes["frac001"]) == r"\frac{3}{4}"
 
 
-def test_extract_name_matches_closest_roster_name(demo_pdf, tmp_path):
+def test_extract_name_matches_closest_roster_name(demo_pdf):
     if shutil.which("tesseract") is None:
         pytest.skip("tesseract is not installed")
     if shutil.which("latexmk") is None:
@@ -149,13 +149,12 @@ def test_extract_name_matches_closest_roster_name(demo_pdf, tmp_path):
 
     boxes = extract_answer_boxes(str(demo_pdf))
 
-    filled_image = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
-    filled_fn = tmp_path / "filled_name.png"
-    cv2.imwrite(str(filled_fn), filled_image)
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
+    filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
     roster = ["Jane Doe", "John Smith", "Alice Johnson", "Bob Lee", "Nancy Drew"]
 
-    assert extract_name(str(filled_fn), boxes["name"], roster) == "Jane Doe"
+    assert extract_name(filled_image, boxes["name"], roster) == "Jane Doe"
 
 
 @pytest.mark.parametrize(
@@ -174,23 +173,15 @@ def test_is_correct(response, answer, expected):
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
-    aligned_filename = align_document_image(
-        str(warped_photo_png), str(DEMO_ANSWER_KEY_PDF)
-    )
+    aligned_image = align_document_image(str(warped_photo_png), str(DEMO_ANSWER_KEY_PDF))
 
-    try:
-        aligned_image = cv2.imread(aligned_filename)
-        assert aligned_image is not None
+    reference_image = _render_pdf_page(DEMO_ANSWER_KEY_PDF, dpi=150)
 
-        reference_image = _render_pdf_page(DEMO_ANSWER_KEY_PDF, dpi=150)
+    aligned_centers = _marker_relative_centers(aligned_image)
+    reference_centers = _marker_relative_centers(reference_image)
 
-        aligned_centers = _marker_relative_centers(aligned_image)
-        reference_centers = _marker_relative_centers(reference_image)
-
-        for marker_id in _MARKER_IDS:
-            aligned_x, aligned_y = aligned_centers[marker_id]
-            reference_x, reference_y = reference_centers[marker_id]
-            assert aligned_x == pytest.approx(reference_x, abs=0.01)
-            assert aligned_y == pytest.approx(reference_y, abs=0.01)
-    finally:
-        Path(aligned_filename).unlink(missing_ok=True)
+    for marker_id in _MARKER_IDS:
+        aligned_x, aligned_y = aligned_centers[marker_id]
+        reference_x, reference_y = reference_centers[marker_id]
+        assert aligned_x == pytest.approx(reference_x, abs=0.01)
+        assert aligned_y == pytest.approx(reference_y, abs=0.01)

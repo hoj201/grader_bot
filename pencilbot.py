@@ -2,7 +2,6 @@ import base64
 import difflib
 import os
 import re
-import tempfile
 from fractions import Fraction
 from typing import Dict, Optional, Tuple, List, LiteralString, Union
 
@@ -35,12 +34,13 @@ _RED_TOLERANCE = 0.15
 
 def grade_hw_stack(worksheet_fn: LiteralString, answer_key_fn: LiteralString, hws: List[LiteralString], roster: List[LiteralString]) -> Dict[LiteralString, Score]:
     boxes = extract_answer_boxes(worksheet_fn)
-    answer_key_fn = align_document_image(answer_key_fn, worksheet_fn)
-    answer_key = {qid: read_box(answer_key_fn, box) for qid, box in boxes.items()}
+    answer_key_image = align_document_image(answer_key_fn, worksheet_fn)
+    answer_key = {qid: read_box(answer_key_image, box) for qid, box in boxes.items()}
     scores = dict()
     for hw in hws:
-        name = extract_name(hw, boxes["name"], roster)
-        scores[name] = grade_hw(answer_key, boxes, hw)
+        hw_image = load_image_rgb(hw)
+        name = extract_name(hw_image, boxes["name"], roster)
+        scores[name] = grade_hw(answer_key, boxes, hw_image)
     return scores
 
 
@@ -56,26 +56,25 @@ def _tesseract_ocr_name(image: np.ndarray) -> str:
     return pytesseract.image_to_string(upscaled, config="--psm 7").strip()
 
 
-def extract_name(hw_fn: LiteralString, box: Box, roster: List[LiteralString]) -> LiteralString:
-    """Reads the handwritten name inside `box` on `hw_fn` and returns
-    whichever name in `roster` it most closely matches.
+def extract_name(image: np.ndarray, box: Box, roster: List[LiteralString]) -> LiteralString:
+    """Reads the handwritten name inside `box` on `image` (an already-loaded
+    RGB numpy array, e.g. from `load_image_rgb`) and returns whichever name
+    in `roster` it most closely matches.
 
     Cursive handwriting OCR is too unreliable to trust verbatim (e.g.
     Tesseract regularly misreads individual letters), but since students
     are drawn from a known, finite roster, fuzzy-matching the noisy OCR
     text against that roster resolves those misreadings in practice.
     """
-    image = _load_image_rgb(hw_fn)
     cropped = _crop_box(image, box, _BOX_INSET)
     ocr_text = _tesseract_ocr_name(cropped)
     matches = difflib.get_close_matches(ocr_text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
     return matches[0] if matches else ""
 
-def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, LiteralString], hw_fn: LiteralString) -> Score:
-    responses = {qid: read_box(hw_fn, box) for qid, box in boxes.items()}
-    correct, attempted = 0,0
+def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, Box], hw_image: np.ndarray) -> Score:
+    correct, attempted = 0, 0
     for qid, box in boxes.items():
-        response = read_box(hw_fn, box)
+        response = read_box(hw_image, box)
         if response != "":
             attempted += 1
         answer = answer_key[qid]
@@ -174,7 +173,8 @@ _MATH_DELIMITER_PATTERN = re.compile(
 _STRAY_SLASH_PATTERN = re.compile(r"[/\\](?![a-zA-Z])")
 
 
-def _load_image_rgb(image_fn: str) -> np.ndarray:
+def load_image_rgb(image_fn: str) -> np.ndarray:
+    """Loads `image_fn` (a PDF or raster image) as an RGB numpy array."""
     if os.path.splitext(image_fn)[1].lower() == ".pdf":
         return render_pdf_page_image(image_fn)
     image_bgr = cv2.imread(image_fn)
@@ -232,9 +232,9 @@ def _mathpix_ocr(image: np.ndarray) -> str:
     return _fix_stray_slashes(text)
 
 
-def read_box(image_fn: str, box: Box) -> str:
-    """Reads the handwritten LaTeX answer inside `box` from `image_fn` (a PDF or raster image)."""
-    image = _load_image_rgb(image_fn)
+def read_box(image: np.ndarray, box: Box) -> str:
+    """Reads the handwritten LaTeX answer inside `box` on `image` (an
+    already-loaded RGB numpy array, e.g. from `load_image_rgb`)."""
     cropped = _crop_box(image, box, _BOX_INSET)
     return _mathpix_ocr(cropped)
 
@@ -275,10 +275,10 @@ def _detect_marker_centers(image, source_name: str) -> Dict[int, Tuple[float, fl
     return centers
 
 
-def align_document_image(image_filename: str, worksheet_filename: str):
+def align_document_image(image_filename: str, worksheet_filename: str) -> np.ndarray:
     """Takes an image of a document with aruco markers and aligns it so
-    that it maps onto a referene image.  A new temporary file is written
-    and the filename is returned"""
+    that it maps onto a reference image, returning the aligned image as
+    an RGB numpy array."""
     with fitz.open(worksheet_filename) as doc:
         page = doc[0]
         page_width_pt, page_height_pt = page.rect.width, page.rect.height
@@ -314,9 +314,4 @@ def align_document_image(image_filename: str, worksheet_filename: str):
     homography, _ = cv2.findHomography(src_points, dst_points)
     aligned = cv2.warpPerspective(photo, homography, (target_width, target_height))
 
-    suffix = os.path.splitext(image_filename)[1] or ".png"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
-        output_filename = tmp_file.name
-    cv2.imwrite(output_filename, aligned)
-
-    return output_filename
+    return cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
