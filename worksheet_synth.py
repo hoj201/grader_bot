@@ -20,11 +20,16 @@ _FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
 
 
 def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
-    r"""This routine basically just runs the shell commands
+    r"""This routine basically just runs the shell command
     latexmk -pdf -usepretex='\def\WSCVMode{0}' filename.tex
-    latexmk -c filename.tex
 
     then returns the path to the output pdf file.
+
+    Intermediate build files (.aux, .fdb_latexmk, etc.) are intentionally
+    left in place rather than cleaned up with `latexmk -c`: they let
+    latexmk skip recompilation on repeated calls when the source is
+    unchanged, which matters a lot for test speed since this function is
+    called on every test run.
     """
     tex_path = Path(tex_filename).resolve()
     cv_flag = "1" if cv_mode else "0"
@@ -39,11 +44,6 @@ def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
             f"-outdir={outdir}",
             tex_path.name,
         ],
-        cwd=tex_path.parent,
-        check=True,
-    )
-    subprocess.run(
-        ["latexmk", "-c", f"-outdir={outdir}", tex_path.name],
         cwd=tex_path.parent,
         check=True,
     )

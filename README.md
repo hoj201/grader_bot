@@ -38,9 +38,6 @@ cv2.imwrite('output_filename.png', noisy)
 # Tasks
 Work on tasks in the order given
 
-## Test `read_box` function on fractions
-Create a few pictures of hand-written fractions and write a unit-test to see if they get interpreted correctly.
-
 ## Create `extract_name` function
 Every worksheet has a field at the top where students are to write their name (see `worksheet.sty`).
 
@@ -75,9 +72,6 @@ whereas these pairs should return `False`
 
 ## Reduce the amount of times files are opened
 Currently we are using file-names to pass around images.  This is inefficient as we re-open the same file many times (particularly the answer key).  Consider passing around images as `fitz.Matrix` or something.  Discuss formats before proceeding with this task. 
-
-## Speed up the unit tests
-they currently take a minute or so.  Not sure why, but there is probably a lot of inefficiency
 
 ## Log all call-reponses from mathpix
 We want to build a labelled training set so that someday we can build our own model, and not rely on mathpix.
