@@ -12,6 +12,7 @@ pymupdf = "^1.28.0"
 pillow = "^12.3.0"
 requests = "^2.34.2"
 python-dotenv = "^1.2.2"
+pytesseract = "^0.3.13"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

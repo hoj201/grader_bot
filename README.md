@@ -38,16 +38,6 @@ cv2.imwrite('output_filename.png', noisy)
 # Tasks
 Work on tasks in the order given
 
-## Create `extract_name` function
-Every worksheet has a field at the top where students are to write their name (see `worksheet.sty`).
-
-In this task you are to fill in the body of the `extract_name(worksheet_fn: str)` function which is currently in `pencilbot.py`.
-
-This function reads the name from the name field using either OCR or a neural network (please discuss). If it helps, feel free to alter `worksheet.sty` by making the "name:" text a different color (dark green perhaps), so that you can filter for where to look for the name.  If you go this route, it would be wise to make the color toggleable using the `cv mode` variable (see `demo.tex` for an example).
-
-### Unit Test
-See if you can create a version of the worksheet with a name written in the name field in something that resembles hand-writing.  Have me preview your image before hand.
-
 ## Create `is_correct` function
 For each each answer and response we will have strings of LaTeX code that we need to compare. The function
 `is_correct` is responsible for comparing them.  This function body is currently blank in `pencilbot.py`.

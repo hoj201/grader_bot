@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from pencilbot import align_document_image, extract_answer_boxes, read_box
+from pencilbot import align_document_image, extract_answer_boxes, extract_name, read_box
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
@@ -139,6 +139,23 @@ def test_read_box_reads_a_handwritten_fraction(demo_pdf, tmp_path):
     cv2.imwrite(str(filled_fn), filled_image)
 
     assert read_box(str(filled_fn), boxes["frac001"]) == r"\frac{3}{4}"
+
+
+def test_extract_name_matches_closest_roster_name(demo_pdf, tmp_path):
+    if shutil.which("tesseract") is None:
+        pytest.skip("tesseract is not installed")
+    if shutil.which("latexmk") is None:
+        pytest.skip("latexmk is not installed")
+
+    boxes = extract_answer_boxes(str(demo_pdf))
+
+    filled_image = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
+    filled_fn = tmp_path / "filled_name.png"
+    cv2.imwrite(str(filled_fn), filled_image)
+
+    roster = ["Jane Doe", "John Smith", "Alice Johnson", "Bob Lee", "Nancy Drew"]
+
+    assert extract_name(str(filled_fn), boxes["name"], roster) == "Jane Doe"
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):

@@ -1,4 +1,5 @@
 import base64
+import difflib
 import os
 import re
 import tempfile
@@ -9,6 +10,7 @@ from dataclasses import dataclass
 import cv2
 import fitz
 import numpy as np
+import pytesseract
 import requests
 from dotenv import load_dotenv
 
@@ -30,20 +32,43 @@ class Score:
 _RED = (1, 0, 0)
 _RED_TOLERANCE = 0.15
 
-def grade_hw_stack(worksheet_fn: LiteralString, answer_key_fn: LiteralString, hws: List[LiteralString]) -> Dict[LiteralString, Score]:
+def grade_hw_stack(worksheet_fn: LiteralString, answer_key_fn: LiteralString, hws: List[LiteralString], roster: List[LiteralString]) -> Dict[LiteralString, Score]:
     boxes = extract_answer_boxes(worksheet_fn)
     answer_key_fn = align_document_image(answer_key_fn, worksheet_fn)
     answer_key = {qid: read_box(answer_key_fn, box) for qid, box in boxes.items()}
     scores = dict()
     for hw in hws:
-        name = extract_name(hw)
+        name = extract_name(hw, boxes["name"], roster)
         scores[name] = grade_hw(answer_key, boxes, hw)
     return scores
 
 
-def extract_name(hw_fn: LiteralString) -> LiteralString:
-    """Reads the name field of a worksheet using OCR"""
-    raise NotImplementedError
+_NAME_OCR_UPSCALE = 6
+_NAME_MATCH_CUTOFF = 0.4
+
+
+def _tesseract_ocr_name(image: np.ndarray) -> str:
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    upscaled = cv2.resize(
+        gray, None, fx=_NAME_OCR_UPSCALE, fy=_NAME_OCR_UPSCALE, interpolation=cv2.INTER_CUBIC
+    )
+    return pytesseract.image_to_string(upscaled, config="--psm 7").strip()
+
+
+def extract_name(hw_fn: LiteralString, box: Box, roster: List[LiteralString]) -> LiteralString:
+    """Reads the handwritten name inside `box` on `hw_fn` and returns
+    whichever name in `roster` it most closely matches.
+
+    Cursive handwriting OCR is too unreliable to trust verbatim (e.g.
+    Tesseract regularly misreads individual letters), but since students
+    are drawn from a known, finite roster, fuzzy-matching the noisy OCR
+    text against that roster resolves those misreadings in practice.
+    """
+    image = _load_image_rgb(hw_fn)
+    cropped = _crop_box(image, box, _BOX_INSET)
+    ocr_text = _tesseract_ocr_name(cropped)
+    matches = difflib.get_close_matches(ocr_text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
+    return matches[0] if matches else ""
 
 def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, LiteralString], hw_fn: LiteralString) -> Score:
     responses = {qid: read_box(hw_fn, box) for qid, box in boxes.items()}
