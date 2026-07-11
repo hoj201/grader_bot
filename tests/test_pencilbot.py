@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from pencilbot import align_document_image, extract_answer_boxes, read_box
+from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
 DEMO_ANSWER_KEY_PDF = Path(__file__).parent.parent / "demo_answer_key.pdf"
@@ -98,7 +99,7 @@ def demo_pdf(tmp_path_factory):
 
 def test_extract_answer_boxes_finds_all_ids(demo_pdf):
     boxes = extract_answer_boxes(str(demo_pdf))
-    assert set(boxes) == {"name", "add001", "sub001"}
+    assert set(boxes) == {"name", "add001", "sub001", "frac001"}
 
 
 def test_extract_answer_boxes_coordinates_are_relative(demo_pdf):
@@ -123,6 +124,21 @@ def test_read_box_reads_handwritten_answers(demo_pdf):
 
     assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["add001"]) == "12"
     assert read_box(str(DEMO_ANSWER_KEY_PDF), boxes["sub001"]) == "11"
+
+
+def test_read_box_reads_a_handwritten_fraction(demo_pdf, tmp_path):
+    if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
+        pytest.skip("Mathpix credentials are not configured")
+    if shutil.which("latexmk") is None:
+        pytest.skip("latexmk is not installed")
+
+    boxes = extract_answer_boxes(str(demo_pdf))
+
+    filled_image = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})
+    filled_fn = tmp_path / "filled_frac.png"
+    cv2.imwrite(str(filled_fn), filled_image)
+
+    assert read_box(str(filled_fn), boxes["frac001"]) == r"\frac{3}{4}"
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
