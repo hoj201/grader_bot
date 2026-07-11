@@ -3,7 +3,7 @@ from pathlib import Path
 import fitz
 import numpy as np
 
-from pencilbot import extract_answer_boxes
+from graderbot import extract_answer_boxes
 from worksheet_synth import (
     add_image_noise,
     fill_worksheet,

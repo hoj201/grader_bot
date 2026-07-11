@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from pencilbot import align_document_image, extract_answer_boxes, extract_name, is_correct, load_image_rgb, read_box
+from graderbot import align_document_image, extract_answer_boxes, extract_name, is_correct, load_image_rgb, read_box
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "pencilbot"
+name = "graderbot"
 version = "0.1.0"
 description = ""
 authors = ["hoj201 <hoj201@gmail.com>"]

@@ -2,7 +2,7 @@
 from worksheet.sty with hand-writing scrawled on top.
 
 The main impetus for this module is the creation of unit-tests
-for pencilbot.py
+for graderbot.py
 """
 
 import re
@@ -128,7 +128,7 @@ def add_image_noise(
 
 
 def _box_to_pixels(box, image_width: int, image_height: int) -> Tuple[int, int, int, int]:
-    """Converts a `pencilbot.Box` (relative coordinates, origin at
+    """Converts a `graderbot.Box` (relative coordinates, origin at
     bottom-left) into pixel (x0, y0, x1, y1) with origin at top-left."""
     x0 = box.x_lower_left * image_width
     x1 = (box.x_lower_left + box.width) * image_width
@@ -205,7 +205,7 @@ def fill_worksheet(
     the worksheet's name box (id "name", drawn by \\WorksheetHeader).
     Returns the composited worksheet as a BGR numpy array.
     """
-    from pencilbot import extract_answer_boxes, render_pdf_page_image
+    from graderbot import extract_answer_boxes, render_pdf_page_image
 
     cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
     blank_worksheet = latexmk_worksheet(tex_fn, cv_mode=False)
