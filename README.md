@@ -38,28 +38,6 @@ cv2.imwrite('output_filename.png', noisy)
 # Tasks
 Work on tasks in the order given
 
-## Create `is_correct` function
-For each each answer and response we will have strings of LaTeX code that we need to compare. The function
-`is_correct` is responsible for comparing them.  This function body is currently blank in `pencilbot.py`.
-
-### Unit Test
-The following pairs should return `True`
-```json
-{
-    "123": "123",
-    "\frac{13}{1}": "13",
-    "1.234567": "1.23456"
-}
-```
-whereas these pairs should return `False`
-```json
-{
-    "123": "128",
-    "\frac{13}{1}": "\frac{13}{2}",
-    "1.234567": "1.28456"
-}
-```
-
 ## Reduce the amount of times files are opened
 Currently we are using file-names to pass around images.  This is inefficient as we re-open the same file many times (particularly the answer key).  Consider passing around images as `fitz.Matrix` or something.  Discuss formats before proceeding with this task. 
 

@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from pencilbot import align_document_image, extract_answer_boxes, extract_name, read_box
+from pencilbot import align_document_image, extract_answer_boxes, extract_name, is_correct, read_box
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
@@ -156,6 +156,21 @@ def test_extract_name_matches_closest_roster_name(demo_pdf, tmp_path):
     roster = ["Jane Doe", "John Smith", "Alice Johnson", "Bob Lee", "Nancy Drew"]
 
     assert extract_name(str(filled_fn), boxes["name"], roster) == "Jane Doe"
+
+
+@pytest.mark.parametrize(
+    "response,answer,expected",
+    [
+        ("123", "123", True),
+        (r"\frac{13}{1}", "13", True),
+        ("1.234567", "1.23456", True),
+        ("123", "128", False),
+        (r"\frac{13}{1}", r"\frac{13}{2}", False),
+        ("1.234567", "1.28456", False),
+    ],
+)
+def test_is_correct(response, answer, expected):
+    assert is_correct(response, answer) == expected
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
