@@ -28,6 +28,8 @@ from pathlib import Path
 
 import anthropic
 
+import storage
+
 MODEL = "claude-sonnet-4-6"
 QUESTIONS_MARKER = "%%QUESTIONS%%"
 
@@ -204,6 +206,18 @@ def main():
     parser.add_argument("--num-questions", type=int, default=10)
     parser.add_argument("--max-repairs", type=int, default=3)
     parser.add_argument("--save-json", action="store_true", help="Also save the raw question JSON")
+    parser.add_argument(
+        "--bucket",
+        default=os.environ.get("S3_BUCKET"),
+        help="S3 bucket to upload PDFs to. Defaults to the S3_BUCKET env var. "
+        "If unset, the worksheet is compiled but not stored.",
+    )
+    parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("worksheets.sqlite3"),
+        help="SQLite database file to record worksheet metadata in",
+    )
     args = parser.parse_args()
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])  # picks up ANTHROPIC_API_KEY from env
@@ -229,6 +243,22 @@ def main():
         success, log_tail = compile_tex(tex_path)
         if success:
             print(f"Done: {tex_path.with_suffix('.pdf')}", file=sys.stderr)
+            if args.bucket:
+                print(f"Uploading to s3://{args.bucket} and recording in {args.db_path}...", file=sys.stderr)
+                record = storage.store_worksheet(
+                    tex_path=tex_path,
+                    questions=questions,
+                    prompt=args.prompt,
+                    model=MODEL,
+                    bucket=args.bucket,
+                    db_path=args.db_path,
+                )
+                print(f"Stored worksheet id={record.id}", file=sys.stderr)
+                print(f"  student: {record.student_pdf_s3url}", file=sys.stderr)
+                print(f"  cv:      {record.cv_pdf_s3url}", file=sys.stderr)
+                print(f"  answers: {record.answers_pdf_s3url}", file=sys.stderr)
+            else:
+                print("No --bucket/S3_BUCKET set; skipping upload and DB storage.", file=sys.stderr)
             return
         if attempt == args.max_repairs:
             print("Failed after max repair attempts. Log tail:\n" + log_tail, file=sys.stderr)

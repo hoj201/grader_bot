@@ -62,6 +62,10 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# GraderBot worksheet storage DB (see storage.py / issue #7)
+worksheets.sqlite3
+worksheets.sqlite3-*
+
 # Flask stuff:
 instance/
 .webassets-cache

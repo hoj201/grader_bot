@@ -35,6 +35,38 @@ noisy = add_image_noise(skewed, noise_level=0.05, rng=np.random.default_rng(7))
 cv2.imwrite('output_filename.png', noisy)
 ```
 
+## Worksheet storage (S3 + SQLite)
+The [worksheetbot](./worksheetbot.py) pipeline can upload the generated PDFs
+(student/blank, cv, and answer key) to S3 and record them, along with the
+`.tex` source and question JSON, in a SQLite database via
+[storage.py](./storage.py). This is opt-in: pass `--bucket` (or set the
+`S3_BUCKET` env var) when running `worksheetbot.py`. If no bucket is
+configured, the worksheet is still compiled but nothing is uploaded or
+stored.
+
+### One-time setup
+1. Create an S3 bucket for PDF + database backups.
+2. Create an IAM user/role with `s3:PutObject`/`s3:GetObject` scoped to that
+   bucket.
+3. Add the following to `.env`:
+   ```
+   S3_BUCKET=<your-bucket-name>
+   AWS_ACCESS_KEY_ID=<...>
+   AWS_SECRET_ACCESS_KEY=<...>
+   AWS_REGION=<...>
+   ```
+
+### Backups
+The SQLite database (`worksheets.sqlite3` by default) is meant to be
+continuously replicated to S3 with [litestream](https://litestream.io/),
+using the config in [litestream.yml](./litestream.yml). Litestream itself
+runs as an external process, e.g.:
+```shell
+litestream replicate -config litestream.yml
+```
+This repo's code only writes to the local SQLite file in WAL mode (required
+for litestream); it does not start or manage the litestream process.
+
 # Tasks
 Work on tasks in the order given
 
