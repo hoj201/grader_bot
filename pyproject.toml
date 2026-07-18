@@ -13,6 +13,8 @@ pillow = "^12.3.0"
 requests = "^2.34.2"
 python-dotenv = "^1.2.2"
 pytesseract = "^0.3.13"
+anthropic = "^0.117.0"
+opencv-python = "^5.0.0.93"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
