@@ -67,6 +67,18 @@ litestream replicate -config litestream.yml
 This repo's code only writes to the local SQLite file in WAL mode (required
 for litestream); it does not start or manage the litestream process.
 
+## Web frontend
+[app.py](./app.py) is a Streamlit app with two tabs: **Gallery**, to browse
+previously created worksheets and open their student/cv/answer-key PDFs via
+presigned S3 links, and **Create**, to generate a new worksheet from a
+prompt (runs the same pipeline as `worksheetbot.py`, including S3 upload +
+DB storage). It requires `S3_BUCKET` and `ANTHROPIC_API_KEY` to be set (see
+above); it reads/writes the same `worksheets.sqlite3` database as the CLI by
+default (override with the `WORKSHEETS_DB_PATH` env var). Run it with:
+```shell
+streamlit run app.py
+```
+
 # Tasks
 Work on tasks in the order given
 

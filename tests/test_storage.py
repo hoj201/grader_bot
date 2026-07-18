@@ -11,10 +11,13 @@ from moto import mock_aws
 from storage import (
     WorksheetRecord,
     generate_answer_key_pdf,
+    generate_presigned_url,
     get_git_sha,
     image_to_pdf,
     init_db,
     insert_worksheet,
+    list_worksheets,
+    parse_s3_url,
     store_worksheet,
     upload_to_s3,
 )
@@ -236,3 +239,54 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT prompt FROM WORKSHEET WHERE id = ?", (record.id,)).fetchone()
     assert row == ("algebra worksheet",)
+
+
+# --------------------------------------------------------------------------
+# list_worksheets
+# --------------------------------------------------------------------------
+
+def test_list_worksheets_returns_rows_ordered_by_created_at_desc(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    older_id = insert_worksheet(conn, _sample_record(prompt="older", created_at="2026-01-01T00:00:00+00:00"))
+    newer_id = insert_worksheet(conn, _sample_record(prompt="newer", created_at="2026-06-01T00:00:00+00:00"))
+
+    records = list_worksheets(conn)
+
+    assert [r.id for r in records] == [newer_id, older_id]
+    assert [r.prompt for r in records] == ["newer", "older"]
+    assert records[0].student_pdf_s3url == "https://bucket.s3.amazonaws.com/student.pdf"
+
+
+def test_list_worksheets_empty_db_returns_empty_list(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    assert list_worksheets(conn) == []
+
+
+# --------------------------------------------------------------------------
+# parse_s3_url
+# --------------------------------------------------------------------------
+
+def test_parse_s3_url_round_trips_upload_to_s3_output():
+    url = "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/student.pdf"
+
+    bucket, key = parse_s3_url(url)
+
+    assert bucket == "graderbot-test-bucket"
+    assert key == "worksheet/student.pdf"
+
+
+# --------------------------------------------------------------------------
+# generate_presigned_url
+# --------------------------------------------------------------------------
+
+@mock_aws
+def test_generate_presigned_url_contains_bucket_and_key():
+    bucket = "graderbot-test-bucket"
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket=bucket)
+
+    url = generate_presigned_url(bucket, "worksheet/student.pdf", s3_client=s3_client)
+
+    assert bucket in url
+    assert "worksheet/student.pdf" in url

@@ -1,8 +1,19 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from worksheetbot import Question, escape_latex, generate_questions, render_questions
+import pytest
+
+from worksheetbot import (
+    MODEL,
+    CompileError,
+    Question,
+    escape_latex,
+    generate_questions,
+    generate_worksheet,
+    render_questions,
+)
 
 
 def _fake_client(raw_text: str) -> MagicMock:
@@ -100,3 +111,101 @@ def test_render_questions_joins_multiple_questions_with_newlines():
     tex = render_questions(questions)
 
     assert tex == "\\Question{1}{a}\n\\Question{2}{b}"
+
+
+def _template(tmp_path: Path) -> Path:
+    template_path = tmp_path / "template.tex"
+    template_path.write_text("HEADER\n%%QUESTIONS%%\nFOOTER\n")
+    return template_path
+
+
+def _questions_client() -> MagicMock:
+    return _fake_client(json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]))
+
+
+def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_path):
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+
+    with patch("worksheetbot.compile_tex", return_value=(True, "")):
+        tex_path, questions, record = generate_worksheet(
+            client, template_path, "arithmetic", out, num_questions=1, max_repairs=3
+        )
+
+    assert tex_path == out.with_suffix(".tex")
+    assert tex_path.exists()
+    assert "%%QUESTIONS%%" not in tex_path.read_text()
+    assert questions == [Question(id="1", text="1+1=?", answer="2")]
+    assert record is None
+
+
+def test_generate_worksheet_stores_when_bucket_given(tmp_path):
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    db_path = tmp_path / "worksheets.sqlite3"
+    fake_record = SimpleNamespace(
+        id=1,
+        student_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/student.pdf",
+        cv_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/cv.pdf",
+        answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/answers.pdf",
+    )
+
+    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "worksheetbot.storage.store_worksheet", return_value=fake_record
+    ) as mock_store:
+        tex_path, questions, record = generate_worksheet(
+            client,
+            template_path,
+            "arithmetic",
+            out,
+            num_questions=1,
+            max_repairs=3,
+            bucket="my-bucket",
+            db_path=db_path,
+        )
+
+    mock_store.assert_called_once_with(
+        tex_path=tex_path,
+        questions=questions,
+        prompt="arithmetic",
+        model=MODEL,
+        bucket="my-bucket",
+        db_path=db_path,
+    )
+    assert record is fake_record
+
+
+def test_generate_worksheet_repairs_and_succeeds_on_retry(tmp_path):
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+
+    with patch(
+        "worksheetbot.compile_tex", side_effect=[(False, "log tail"), (True, "")]
+    ), patch("worksheetbot.repair_tex", return_value="FIXED SOURCE") as mock_repair:
+        tex_path, questions, record = generate_worksheet(
+            client, template_path, "arithmetic", out, num_questions=1, max_repairs=3
+        )
+
+    mock_repair.assert_called_once()
+    assert tex_path.read_text() == "FIXED SOURCE"
+    assert record is None
+
+
+def test_generate_worksheet_raises_compile_error_after_max_repairs(tmp_path):
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+
+    with patch(
+        "worksheetbot.compile_tex", return_value=(False, "persistent failure")
+    ), patch("worksheetbot.repair_tex", return_value="STILL BROKEN") as mock_repair:
+        with pytest.raises(CompileError) as exc_info:
+            generate_worksheet(
+                client, template_path, "arithmetic", out, num_questions=1, max_repairs=1
+            )
+
+    assert exc_info.value.log_tail == "persistent failure"
+    assert mock_repair.call_count == 1

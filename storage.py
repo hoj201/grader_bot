@@ -11,7 +11,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlite3 import Connection, connect
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import boto3
 import cv2
@@ -92,6 +93,33 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
     return cursor.lastrowid
 
 
+def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
+    rows = conn.execute(
+        """
+        SELECT id, prompt, tex_source, questions_json, git_sha, model, num_questions,
+               student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at
+        FROM WORKSHEET
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    return [
+        WorksheetRecord(
+            id=row[0],
+            prompt=row[1],
+            tex_source=row[2],
+            questions_json=row[3],
+            git_sha=row[4],
+            model=row[5],
+            num_questions=row[6],
+            student_pdf_s3url=row[7],
+            cv_pdf_s3url=row[8],
+            answers_pdf_s3url=row[9],
+            created_at=row[10],
+        )
+        for row in rows
+    ]
+
+
 # --------------------------------------------------------------------------
 # S3
 # --------------------------------------------------------------------------
@@ -100,6 +128,22 @@ def upload_to_s3(local_path: Path, bucket: str, key: str, s3_client=None) -> str
     client = s3_client if s3_client is not None else boto3.client("s3")
     client.upload_file(str(local_path), bucket, key)
     return f"https://{bucket}.s3.amazonaws.com/{key}"
+
+
+def parse_s3_url(url: str) -> Tuple[str, str]:
+    """Splits a `https://{bucket}.s3.amazonaws.com/{key}` URL, as produced
+    by `upload_to_s3`, back into `(bucket, key)`."""
+    parsed = urlparse(url)
+    bucket = parsed.netloc.split(".s3.amazonaws.com")[0]
+    key = parsed.path.lstrip("/")
+    return bucket, key
+
+
+def generate_presigned_url(bucket: str, key: str, s3_client=None, expires_in: int = 3600) -> str:
+    client = s3_client if s3_client is not None else boto3.client("s3")
+    return client.generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in
+    )
 
 
 # --------------------------------------------------------------------------
