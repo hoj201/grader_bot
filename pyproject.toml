@@ -15,9 +15,12 @@ python-dotenv = "^1.2.2"
 pytesseract = "^0.3.13"
 anthropic = "^0.117.0"
 opencv-python = "^5.0.0.93"
+boto3 = "^1.35.0"
+streamlit = "^1.38.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+moto = {extras = ["s3"], version = "^5.0.0"}
 
 
 [build-system]

@@ -28,6 +28,9 @@ from pathlib import Path
 
 import anthropic
 
+import storage
+from worksheet_synth import _texinputs_env
+
 MODEL = "claude-sonnet-4-6"
 QUESTIONS_MARKER = "%%QUESTIONS%%"
 
@@ -159,6 +162,7 @@ def compile_tex(tex_path: Path) -> tuple[bool, str]:
         capture_output=True,
         text=True,
         timeout=120,
+        env=_texinputs_env(),
     )
     success = result.returncode == 0 and (tex_path.with_suffix(".pdf")).exists()
     log = result.stdout + result.stderr
@@ -192,6 +196,70 @@ def repair_tex(client: anthropic.Anthropic, tex_source: str, log_tail: str) -> s
 # Orchestration
 # --------------------------------------------------------------------------
 
+class CompileError(Exception):
+    """Raised when LaTeX compilation fails after exhausting repair attempts."""
+
+    def __init__(self, log_tail: str):
+        self.log_tail = log_tail
+        super().__init__(log_tail)
+
+
+def generate_worksheet(
+    client: anthropic.Anthropic,
+    template_path: Path,
+    prompt: str,
+    out: Path,
+    num_questions: int,
+    max_repairs: int,
+    bucket: str = None,
+    db_path: Path = Path("worksheets.sqlite3"),
+) -> tuple[Path, list, "storage.WorksheetRecord"]:
+    """Runs the full prompt -> questions -> LaTeX -> compile (with repair
+    retries) -> optional S3/DB storage pipeline. Raises CompileError if
+    compilation still fails after `max_repairs` retries. Returns
+    (tex_path, questions, record), where `record` is None if `bucket` is
+    not given.
+    """
+    print(f"Generating {num_questions} questions...", file=sys.stderr)
+    questions = generate_questions(client, prompt, num_questions)
+
+    questions_tex = render_questions(questions)
+    tex_source = fill_template(template_path, questions_tex)
+
+    out = Path(out)
+    out_dir = out.parent if out.parent != Path("") else Path(".")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tex_path = out_dir / f"{out.name}.tex"
+    tex_path.write_text(tex_source)
+
+    for attempt in range(max_repairs + 1):
+        print(f"Compiling (attempt {attempt + 1})...", file=sys.stderr)
+        success, log_tail = compile_tex(tex_path)
+        if success:
+            print(f"Done: {tex_path.with_suffix('.pdf')}", file=sys.stderr)
+            record = None
+            if bucket:
+                print(f"Uploading to s3://{bucket} and recording in {db_path}...", file=sys.stderr)
+                record = storage.store_worksheet(
+                    tex_path=tex_path,
+                    questions=questions,
+                    prompt=prompt,
+                    model=MODEL,
+                    bucket=bucket,
+                    db_path=db_path,
+                )
+                print(f"Stored worksheet id={record.id}", file=sys.stderr)
+                print(f"  student: {record.student_pdf_s3url}", file=sys.stderr)
+                print(f"  cv:      {record.cv_pdf_s3url}", file=sys.stderr)
+                print(f"  answers: {record.answers_pdf_s3url}", file=sys.stderr)
+            return tex_path, questions, record
+        if attempt == max_repairs:
+            raise CompileError(log_tail)
+        print("Compile failed, asking model to repair...", file=sys.stderr)
+        tex_source = repair_tex(client, tex_source, log_tail)
+        tex_path.write_text(tex_source)
+
+
 def main():
     from dotenv import load_dotenv
     import os
@@ -204,38 +272,44 @@ def main():
     parser.add_argument("--num-questions", type=int, default=10)
     parser.add_argument("--max-repairs", type=int, default=3)
     parser.add_argument("--save-json", action="store_true", help="Also save the raw question JSON")
+    parser.add_argument(
+        "--bucket",
+        default=os.environ.get("S3_BUCKET"),
+        help="S3 bucket to upload PDFs to. Defaults to the S3_BUCKET env var. "
+        "If unset, the worksheet is compiled but not stored.",
+    )
+    parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("worksheets.sqlite3"),
+        help="SQLite database file to record worksheet metadata in",
+    )
     args = parser.parse_args()
 
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])  # picks up ANTHROPIC_API_KEY from env
 
-    print(f"Generating {args.num_questions} questions...", file=sys.stderr)
-    questions = generate_questions(client, args.prompt, args.num_questions)
+    try:
+        tex_path, questions, record = generate_worksheet(
+            client,
+            args.template,
+            args.prompt,
+            Path(args.out),
+            args.num_questions,
+            args.max_repairs,
+            bucket=args.bucket,
+            db_path=args.db_path,
+        )
+    except CompileError as e:
+        print("Failed after max repair attempts. Log tail:\n" + e.log_tail, file=sys.stderr)
+        sys.exit(1)
 
     if args.save_json:
         Path(f"{args.out}.json").write_text(
             json.dumps([asdict(q) for q in questions], indent=2)
         )
 
-    questions_tex = render_questions(questions)
-    tex_source = fill_template(args.template, questions_tex)
-
-    out_dir = Path(args.out).parent if Path(args.out).parent != Path("") else Path(".")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    tex_path = out_dir / f"{Path(args.out).name}.tex"
-    tex_path.write_text(tex_source)
-
-    for attempt in range(args.max_repairs + 1):
-        print(f"Compiling (attempt {attempt + 1})...", file=sys.stderr)
-        success, log_tail = compile_tex(tex_path)
-        if success:
-            print(f"Done: {tex_path.with_suffix('.pdf')}", file=sys.stderr)
-            return
-        if attempt == args.max_repairs:
-            print("Failed after max repair attempts. Log tail:\n" + log_tail, file=sys.stderr)
-            sys.exit(1)
-        print("Compile failed, asking model to repair...", file=sys.stderr)
-        tex_source = repair_tex(client, tex_source, log_tail)
-        tex_path.write_text(tex_source)
+    if not record:
+        print("No --bucket/S3_BUCKET set; skipping upload and DB storage.", file=sys.stderr)
 
 
 if __name__ == "__main__":
