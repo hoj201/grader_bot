@@ -28,6 +28,12 @@ def _seed_worksheet(db_path):
 
 
 def _set_env(monkeypatch, db_path):
+    # app.py calls load_dotenv() on every run. python-dotenv's find_dotenv()
+    # walks up from app.py's own location (not the cwd), so it will pick up
+    # a real .env in the repo root and repopulate any var that monkeypatch
+    # has deleted from os.environ. Neutralize it so these tests are hermetic
+    # regardless of what's in a developer's local .env.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
     monkeypatch.setenv("WORKSHEETS_DB_PATH", str(db_path))
     monkeypatch.setenv("S3_BUCKET", "bucket")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
