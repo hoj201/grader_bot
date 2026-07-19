@@ -10,6 +10,7 @@ from moto import mock_aws
 
 from storage import (
     WorksheetRecord,
+    _default_s3_client,
     generate_answer_key_pdf,
     generate_presigned_url,
     get_git_sha,
@@ -120,6 +121,22 @@ def test_insert_worksheet_allows_null_pdf_urls(tmp_path):
         (new_id,),
     ).fetchone()
     assert row == (None, None)
+
+
+# --------------------------------------------------------------------------
+# _default_s3_client
+# --------------------------------------------------------------------------
+
+def test_default_s3_client_uses_aws_region_env_var(monkeypatch):
+    """boto3 only auto-reads AWS_DEFAULT_REGION, not AWS_REGION (which this
+    repo's .env/README use), so an unset region silently defaults to
+    us-east-1 and breaks presigned URLs for buckets in other regions."""
+    monkeypatch.setenv("AWS_REGION", "us-east-2")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    client = _default_s3_client()
+
+    assert client.meta.region_name == "us-east-2"
 
 
 # --------------------------------------------------------------------------

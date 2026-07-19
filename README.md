@@ -46,8 +46,36 @@ stored.
 
 ### One-time setup
 1. Create an S3 bucket for PDF + database backups.
-2. Create an IAM user/role with `s3:PutObject`/`s3:GetObject` scoped to that
-   bucket.
+2. Create an IAM user/role with an S3 policy scoped to that bucket. This
+   repo's code only needs `s3:PutObject`/`s3:GetObject`, but litestream also
+   needs `s3:GetBucketLocation`/`s3:ListBucket` (bucket-level) and
+   `s3:DeleteObject`/`s3:ListMultipartUploadParts`/`s3:AbortMultipartUpload`
+   (object-level) for replication and retention. Example policy:
+   ```json
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Sid": "BucketLevel",
+               "Effect": "Allow",
+               "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
+               "Resource": "arn:aws:s3:::<your-bucket-name>"
+           },
+           {
+               "Sid": "ObjectLevel",
+               "Effect": "Allow",
+               "Action": [
+                   "s3:PutObject",
+                   "s3:GetObject",
+                   "s3:DeleteObject",
+                   "s3:ListMultipartUploadParts",
+                   "s3:AbortMultipartUpload"
+               ],
+               "Resource": "arn:aws:s3:::<your-bucket-name>/*"
+           }
+       ]
+   }
+   ```
 3. Add the following to `.env`:
    ```
    S3_BUCKET=<your-bucket-name>
@@ -60,12 +88,23 @@ stored.
 The SQLite database (`worksheets.sqlite3` by default) is meant to be
 continuously replicated to S3 with [litestream](https://litestream.io/),
 using the config in [litestream.yml](./litestream.yml). Litestream itself
-runs as an external process, e.g.:
+runs as an external process; this repo's code only writes to the local
+SQLite file in WAL mode (required for litestream) and does not start or
+manage the litestream process.
+
+Install litestream locally with:
 ```shell
+brew install benbjohnson/litestream/litestream
+```
+
+`litestream.yml` references `${S3_BUCKET}`, so export `.env` before starting
+replication. Start it manually, once per development session, in its own
+terminal (or backgrounded), before running `worksheetbot.py` or
+`streamlit run app.py`:
+```shell
+set -a; source .env; set +a
 litestream replicate -config litestream.yml
 ```
-This repo's code only writes to the local SQLite file in WAL mode (required
-for litestream); it does not start or manage the litestream process.
 
 ## Web frontend
 [app.py](./app.py) is a Streamlit app with two tabs: **Gallery**, to browse

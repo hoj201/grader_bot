@@ -29,6 +29,7 @@ from pathlib import Path
 import anthropic
 
 import storage
+from worksheet_synth import _texinputs_env
 
 MODEL = "claude-sonnet-4-6"
 QUESTIONS_MARKER = "%%QUESTIONS%%"
@@ -161,6 +162,7 @@ def compile_tex(tex_path: Path) -> tuple[bool, str]:
         capture_output=True,
         text=True,
         timeout=120,
+        env=_texinputs_env(),
     )
     success = result.returncode == 0 and (tex_path.with_suffix(".pdf")).exists()
     log = result.stdout + result.stderr

@@ -34,6 +34,19 @@ def test_latexmk_worksheet_cv_and_blank_outputs_do_not_collide():
     assert Path(blank_pdf_path).is_file()
 
 
+def test_latexmk_worksheet_finds_repo_root_style_files_from_subdirectory(tmp_path):
+    """worksheet.sty/questions.sty live at the repo root, not in the TeX
+    distribution. app.py writes generated .tex files into a subdirectory
+    (generated/<uuid>/), so compilation must still find them via TEXINPUTS
+    rather than relying on cwd."""
+    tex_copy = tmp_path / "demo.tex"
+    tex_copy.write_text(DEMO_TEX.read_text())
+
+    pdf_path = latexmk_worksheet(str(tex_copy), cv_mode=False)
+
+    assert Path(pdf_path).is_file()
+
+
 def test_write_on_image_draws_text_without_mutating_input():
     blank = np.full((100, 300, 3), 255, dtype=np.uint8)
     original = blank.copy()

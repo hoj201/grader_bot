@@ -6,6 +6,7 @@ The SQLite file is expected to be replicated to S3 by litestream
 """
 
 import json
+import os
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -124,8 +125,17 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
 # S3
 # --------------------------------------------------------------------------
 
+def _default_s3_client():
+    """boto3 only reads AWS_DEFAULT_REGION automatically, not AWS_REGION
+    (which is what this repo's .env and README use) - so an unset region
+    silently falls back to us-east-1. If the bucket lives elsewhere,
+    presigned URLs get signed for the wrong region's endpoint and S3
+    rejects them. Pass AWS_REGION through explicitly to avoid that."""
+    return boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
+
+
 def upload_to_s3(local_path: Path, bucket: str, key: str, s3_client=None) -> str:
-    client = s3_client if s3_client is not None else boto3.client("s3")
+    client = s3_client if s3_client is not None else _default_s3_client()
     client.upload_file(str(local_path), bucket, key)
     return f"https://{bucket}.s3.amazonaws.com/{key}"
 
@@ -140,7 +150,7 @@ def parse_s3_url(url: str) -> Tuple[str, str]:
 
 
 def generate_presigned_url(bucket: str, key: str, s3_client=None, expires_in: int = 3600) -> str:
-    client = s3_client if s3_client is not None else boto3.client("s3")
+    client = s3_client if s3_client is not None else _default_s3_client()
     return client.generate_presigned_url(
         "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in
     )
