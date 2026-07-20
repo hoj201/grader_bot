@@ -122,8 +122,7 @@ default (override with the `WORKSHEETS_DB_PATH` env var). Run it with:
 streamlit run app.py
 ```
 
-# Tasks
-Work on tasks in the order given
+## Fly.io
+We currently deploy to fly.io at the url https://grader-bot.fly.dev
 
-## Log all call-reponses from mathpix
-We want to build a labelled training set so that someday we can build our own model, and not rely on mathpix.
+Deployment is **not** automated on every update to the `main` branch.  It must be initiated manually.
