@@ -1,26 +1,27 @@
-# Fly.io app config for GraderBot's Streamlit frontend (app.py).
-# Deploy with: fly launch --no-deploy (first time, to create the app) then
-# fly deploy. See README.md "Web frontend" section for required secrets.
+# fly.toml app configuration file generated for grader-bot on 2026-07-20T14:32:37Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "graderbot"
-primary_region = "iad"
+app = 'grader-bot'
+primary_region = 'ord'
 
 [build]
 
 [env]
-  WORKSHEETS_DB_PATH = "/data/worksheets.sqlite3"
+  WORKSHEETS_DB_PATH = '/data/worksheets.sqlite3'
 
-[mounts]
-  source = "graderbot_data"
-  destination = "/data"
+[[mounts]]
+  source = 'graderbot_data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8501
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "1gb"
+  size = 'shared-cpu-1x'
+  memory = '1gb'
