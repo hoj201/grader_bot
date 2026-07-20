@@ -9,7 +9,9 @@ from worksheetbot import (
     MODEL,
     CompileError,
     Question,
+    choose_grid_columns,
     escape_latex,
+    estimate_question_width,
     generate_questions,
     generate_worksheet,
     render_questions,
@@ -111,6 +113,56 @@ def test_render_questions_joins_multiple_questions_with_newlines():
     tex = render_questions(questions)
 
     assert tex == "\\Question{1}{a}\n\\Question{2}{b}"
+
+
+def test_estimate_question_width_counts_visible_characters():
+    assert estimate_question_width("$7+5=$") == len("7+5=")
+
+
+def test_estimate_question_width_collapses_frac_to_widest_part():
+    # \frac{1}{4} -> numerator "1" (len 1), denominator "4" (len 1) -> "X"
+    assert estimate_question_width(r"$\frac{1}{4}+\frac{1}{2}=$") == len("X+X=")
+    assert estimate_question_width(r"$\frac{100}{4}=$") == len("XXX=")
+
+
+def test_estimate_question_width_strips_control_words():
+    assert estimate_question_width(r"$\sqrt{9}=$") == len("9=")
+
+
+def test_choose_grid_columns_falls_back_to_one_below_minimum_count():
+    questions = [Question(id=str(i), text="$2+2=$", answer="4") for i in range(3)]
+
+    assert choose_grid_columns(questions) == 1
+
+
+def test_choose_grid_columns_uses_multiple_columns_for_uniform_short_questions():
+    questions = [Question(id=str(i), text="$2+2=$", answer="4") for i in range(10)]
+
+    assert choose_grid_columns(questions) > 1
+
+
+def test_choose_grid_columns_falls_back_to_one_when_widths_vary_too_much():
+    questions = [Question(id=str(i), text="$2+2=$", answer="4") for i in range(9)]
+    questions.append(
+        Question(
+            id="9",
+            text="$x^2 - 5x + 6 = 0 \\text{, solve for } x \\text{ using the quadratic formula}$",
+            answer="2, 3",
+        )
+    )
+
+    assert choose_grid_columns(questions) == 1
+
+
+def test_render_questions_lays_out_uniform_questions_in_a_grid():
+    questions = [Question(id=str(i), text="$2+2=$", answer="4") for i in range(10)]
+
+    tex = render_questions(questions)
+
+    assert tex.startswith(r"\begin{tabular}{@{}")
+    assert tex.endswith(r"\end{tabular}")
+    assert tex.count(r"\Question{") == 10
+    assert " & " in tex
 
 
 def _template(tmp_path: Path) -> Path:
