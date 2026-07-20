@@ -1,0 +1,15 @@
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+env/
+venv/
+build_blank
+build_cv
+generated
+worksheets.sqlite3
+worksheets.sqlite3-*
+.env
+tests
+*.md

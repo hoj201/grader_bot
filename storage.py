@@ -7,7 +7,6 @@ The SQLite file is expected to be replicated to S3 by litestream
 
 import json
 import os
-import subprocess
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +30,6 @@ class WorksheetRecord:
     prompt: str
     tex_source: str
     questions_json: str
-    git_sha: str
     model: str
     num_questions: int
     student_pdf_s3url: Optional[str] = None
@@ -55,7 +53,6 @@ def init_db(db_path: Path) -> Connection:
             prompt TEXT,
             tex_source TEXT,
             questions_json TEXT,
-            git_sha TEXT,
             model TEXT,
             num_questions INTEGER,
             student_pdf_s3url TEXT,
@@ -65,6 +62,9 @@ def init_db(db_path: Path) -> Connection:
         )
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    if "git_sha" in columns:
+        conn.execute("ALTER TABLE WORKSHEET DROP COLUMN git_sha")
     conn.commit()
     return conn
 
@@ -73,15 +73,14 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
     cursor = conn.execute(
         """
         INSERT INTO WORKSHEET
-            (prompt, tex_source, questions_json, git_sha, model, num_questions,
+            (prompt, tex_source, questions_json, model, num_questions,
              student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
             record.tex_source,
             record.questions_json,
-            record.git_sha,
             record.model,
             record.num_questions,
             record.student_pdf_s3url,
@@ -97,7 +96,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
 def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
     rows = conn.execute(
         """
-        SELECT id, prompt, tex_source, questions_json, git_sha, model, num_questions,
+        SELECT id, prompt, tex_source, questions_json, model, num_questions,
                student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at
         FROM WORKSHEET
         ORDER BY created_at DESC
@@ -109,13 +108,12 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
             prompt=row[1],
             tex_source=row[2],
             questions_json=row[3],
-            git_sha=row[4],
-            model=row[5],
-            num_questions=row[6],
-            student_pdf_s3url=row[7],
-            cv_pdf_s3url=row[8],
-            answers_pdf_s3url=row[9],
-            created_at=row[10],
+            model=row[4],
+            num_questions=row[5],
+            student_pdf_s3url=row[6],
+            cv_pdf_s3url=row[7],
+            answers_pdf_s3url=row[8],
+            created_at=row[9],
         )
         for row in rows
     ]
@@ -172,17 +170,6 @@ def generate_answer_key_pdf(tex_fn: str, answers: Dict[str, str], out_path: Path
 
 
 # --------------------------------------------------------------------------
-# Misc
-# --------------------------------------------------------------------------
-
-def get_git_sha() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-    )
-    return result.stdout.strip()
-
-
-# --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
 
@@ -213,7 +200,6 @@ def store_worksheet(
         prompt=prompt,
         tex_source=tex_path.read_text(),
         questions_json=json.dumps([asdict(q) for q in questions]),
-        git_sha=get_git_sha(),
         model=model,
         num_questions=len(questions),
         student_pdf_s3url=student_url,

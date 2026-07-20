@@ -82,7 +82,11 @@ stored.
    AWS_ACCESS_KEY_ID=<...>
    AWS_SECRET_ACCESS_KEY=<...>
    AWS_REGION=<...>
+   WORKSHEETS_DB_PATH=worksheets.sqlite3
    ```
+   `litestream.yml` reads its DB path from `WORKSHEETS_DB_PATH`, so this must
+   be set (and match the path used by `app.py`/`worksheetbot.py`) for
+   replication to point at the right file.
 
 ### Backups
 The SQLite database (`worksheets.sqlite3` by default) is meant to be

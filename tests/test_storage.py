@@ -13,7 +13,6 @@ from storage import (
     _default_s3_client,
     generate_answer_key_pdf,
     generate_presigned_url,
-    get_git_sha,
     image_to_pdf,
     init_db,
     insert_worksheet,
@@ -30,7 +29,6 @@ def _sample_record(**overrides) -> WorksheetRecord:
         prompt="10 question algebra worksheet",
         tex_source=r"\documentclass{article}\begin{document}hi\end{document}",
         questions_json='[{"id": "1", "text": "1+1=?", "answer": "2"}]',
-        git_sha="deadbeef",
         model="claude-sonnet-4-6",
         num_questions=1,
         student_pdf_s3url="https://bucket.s3.amazonaws.com/student.pdf",
@@ -56,7 +54,6 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "prompt",
         "tex_source",
         "questions_json",
-        "git_sha",
         "model",
         "num_questions",
         "student_pdf_s3url",
@@ -83,6 +80,35 @@ def test_init_db_is_idempotent(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM WORKSHEET").fetchone()[0] == 0
 
 
+def test_init_db_drops_legacy_git_sha_column(tmp_path):
+    db_path = tmp_path / "worksheets.sqlite3"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE WORKSHEET (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            tex_source TEXT,
+            questions_json TEXT,
+            git_sha TEXT,
+            model TEXT,
+            num_questions INTEGER,
+            student_pdf_s3url TEXT,
+            cv_pdf_s3url TEXT,
+            answers_pdf_s3url TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = init_db(db_path)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    assert "git_sha" not in columns
+
+
 def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
     record = _sample_record()
@@ -90,7 +116,7 @@ def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
     new_id = insert_worksheet(conn, record)
 
     row = conn.execute(
-        "SELECT prompt, tex_source, questions_json, git_sha, model, num_questions, "
+        "SELECT prompt, tex_source, questions_json, model, num_questions, "
         "student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at "
         "FROM WORKSHEET WHERE id = ?",
         (new_id,),
@@ -100,7 +126,6 @@ def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
         record.prompt,
         record.tex_source,
         record.questions_json,
-        record.git_sha,
         record.model,
         record.num_questions,
         record.student_pdf_s3url,
@@ -193,20 +218,6 @@ def test_generate_answer_key_pdf_fills_worksheet_and_converts_to_pdf(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# get_git_sha
-# --------------------------------------------------------------------------
-
-def test_get_git_sha_returns_stripped_output_of_git_rev_parse():
-    with patch("storage.subprocess.run") as mock_run:
-        mock_run.return_value.stdout = "abc123\n"
-        sha = get_git_sha()
-
-    assert sha == "abc123"
-    args, kwargs = mock_run.call_args
-    assert args[0] == ["git", "rev-parse", "HEAD"]
-
-
-# --------------------------------------------------------------------------
 # store_worksheet orchestration
 # --------------------------------------------------------------------------
 
@@ -225,8 +236,7 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
 
     with patch("storage.latexmk_worksheet", side_effect=fake_latexmk) as mock_latexmk, \
          patch("storage.generate_answer_key_pdf", return_value=answers_pdf) as mock_answer_key, \
-         patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}") as mock_upload, \
-         patch("storage.get_git_sha", return_value="deadbeef"):
+         patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}") as mock_upload:
         record = store_worksheet(
             tex_path=tex_path,
             questions=questions,
@@ -246,7 +256,6 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     assert record.prompt == "algebra worksheet"
     assert record.model == "claude-sonnet-4-6"
     assert record.num_questions == 1
-    assert record.git_sha == "deadbeef"
     assert record.tex_source == tex_path.read_text()
     assert record.questions_json == '[{"id": "1", "text": "1+1=?", "answer": "2"}]'
     assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/student.pdf"

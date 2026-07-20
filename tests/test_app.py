@@ -15,7 +15,6 @@ def _seed_worksheet(db_path):
             prompt="10 question algebra worksheet",
             tex_source=r"\documentclass{article}",
             questions_json="[]",
-            git_sha="deadbeef",
             model="claude-sonnet-4-6",
             num_questions=10,
             student_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/student.pdf",
