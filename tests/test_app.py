@@ -20,6 +20,7 @@ def _seed_worksheet(db_path):
             student_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/student.pdf",
             cv_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/cv.pdf",
             answers_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/answers.pdf",
+            sty_hash="deadbeef",
             created_at="2026-07-18T00:00:00+00:00",
         ),
     )
@@ -54,6 +55,33 @@ def test_gallery_tab_renders_seeded_worksheet_without_error(tmp_path, monkeypatc
     assert not at.exception
     markdown_texts = " ".join(md.value for md in at.markdown)
     assert "10 question algebra worksheet" in markdown_texts
+    caption_texts = " ".join(c.value for c in at.caption)
+    assert "sty=deadbeef" in caption_texts
+
+
+def test_gallery_tab_shows_unknown_sty_version_when_hash_missing(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    storage.insert_worksheet(
+        conn,
+        storage.WorksheetRecord(
+            prompt="legacy worksheet",
+            tex_source=r"\documentclass{article}",
+            questions_json="[]",
+            model="claude-sonnet-4-6",
+            num_questions=5,
+            created_at="2026-07-18T00:00:00+00:00",
+        ),
+    )
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    caption_texts = " ".join(c.value for c in at.caption)
+    assert "sty=unknown" in caption_texts
 
 
 def test_gallery_tab_shows_empty_state_with_no_worksheets(tmp_path, monkeypatch):

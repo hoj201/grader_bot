@@ -5,6 +5,7 @@ The SQLite file is expected to be replicated to S3 by litestream
 (`litestream.yml`), which is why `init_db` enables WAL journal mode.
 """
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -19,7 +20,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from worksheet_synth import fill_worksheet, latexmk_worksheet
+from worksheet_synth import WORKSHEET_STY_PATH, fill_worksheet, latexmk_worksheet
 
 if TYPE_CHECKING:
     from worksheetbot import Question
@@ -35,6 +36,7 @@ class WorksheetRecord:
     student_pdf_s3url: Optional[str] = None
     cv_pdf_s3url: Optional[str] = None
     answers_pdf_s3url: Optional[str] = None
+    sty_hash: Optional[str] = None
     created_at: Optional[str] = None
     id: Optional[int] = None
 
@@ -58,6 +60,16 @@ def init_db(db_path: Path) -> Connection:
             student_pdf_s3url TEXT,
             cv_pdf_s3url TEXT,
             answers_pdf_s3url TEXT,
+            sty_hash TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS STY_VERSION (
+            hash TEXT PRIMARY KEY,
+            content TEXT,
             created_at TEXT
         )
         """
@@ -65,6 +77,8 @@ def init_db(db_path: Path) -> Connection:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
     if "git_sha" in columns:
         conn.execute("ALTER TABLE WORKSHEET DROP COLUMN git_sha")
+    if "sty_hash" not in columns:
+        conn.execute("ALTER TABLE WORKSHEET ADD COLUMN sty_hash TEXT")
     conn.commit()
     return conn
 
@@ -74,8 +88,8 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
         """
         INSERT INTO WORKSHEET
             (prompt, tex_source, questions_json, model, num_questions,
-             student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
@@ -86,6 +100,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.student_pdf_s3url,
             record.cv_pdf_s3url,
             record.answers_pdf_s3url,
+            record.sty_hash,
             record.created_at,
         ),
     )
@@ -97,7 +112,7 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
     rows = conn.execute(
         """
         SELECT id, prompt, tex_source, questions_json, model, num_questions,
-               student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at
+               student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at
         FROM WORKSHEET
         ORDER BY created_at DESC
         """
@@ -113,10 +128,34 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
             student_pdf_s3url=row[6],
             cv_pdf_s3url=row[7],
             answers_pdf_s3url=row[8],
-            created_at=row[9],
+            sty_hash=row[9],
+            created_at=row[10],
         )
         for row in rows
     ]
+
+
+# --------------------------------------------------------------------------
+# .sty versioning
+# --------------------------------------------------------------------------
+
+def compute_sty_hash(sty_path: Path = WORKSHEET_STY_PATH) -> str:
+    """Returns the sha256 hex digest of the .sty file's contents, used to
+    tie a compiled worksheet to the exact layout it was built with."""
+    return hashlib.sha256(Path(sty_path).read_bytes()).hexdigest()
+
+
+def record_sty_version(conn: Connection, sty_path: Path = WORKSHEET_STY_PATH) -> str:
+    """Ensures a STY_VERSION row exists for the current contents of
+    `sty_path`, inserting one only the first time this hash is seen, and
+    returns its hash."""
+    sty_hash = compute_sty_hash(sty_path)
+    conn.execute(
+        "INSERT OR IGNORE INTO STY_VERSION (hash, content, created_at) VALUES (?, ?, ?)",
+        (sty_hash, Path(sty_path).read_text(), datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    return sty_hash
 
 
 # --------------------------------------------------------------------------
@@ -196,6 +235,9 @@ def store_worksheet(
     cv_url = upload_to_s3(Path(cv_pdf), bucket, f"{stem}/cv.pdf", s3_client=s3_client)
     answers_url = upload_to_s3(Path(answers_pdf), bucket, f"{stem}/answers.pdf", s3_client=s3_client)
 
+    conn = init_db(db_path)
+    sty_hash = record_sty_version(conn)
+
     record = WorksheetRecord(
         prompt=prompt,
         tex_source=tex_path.read_text(),
@@ -205,10 +247,10 @@ def store_worksheet(
         student_pdf_s3url=student_url,
         cv_pdf_s3url=cv_url,
         answers_pdf_s3url=answers_url,
+        sty_hash=sty_hash,
         created_at=datetime.now(timezone.utc).isoformat(),
     )
 
-    conn = init_db(db_path)
     record.id = insert_worksheet(conn, record)
     conn.close()
 

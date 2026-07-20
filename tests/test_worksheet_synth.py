@@ -35,7 +35,7 @@ def test_latexmk_worksheet_cv_and_blank_outputs_do_not_collide():
 
 
 def test_latexmk_worksheet_finds_repo_root_style_files_from_subdirectory(tmp_path):
-    """worksheet.sty/questions.sty live at the repo root, not in the TeX
+    """gbworksheet.sty/questions.sty live at the repo root, not in the TeX
     distribution. app.py writes generated .tex files into a subdirectory
     (generated/<uuid>/), so compilation must still find them via TEXINPUTS
     rather than relying on cwd."""

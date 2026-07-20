@@ -42,9 +42,10 @@ def render_gallery() -> None:
     for record in records:
         with st.container(border=True):
             st.markdown(f"**{record.prompt}**")
+            sty_version = record.sty_hash[:8] if record.sty_hash else "unknown"
             st.caption(
                 f"id={record.id} · {record.num_questions} questions · "
-                f"{record.model} · {record.created_at}"
+                f"{record.model} · sty={sty_version} · {record.created_at}"
             )
             cols = st.columns(3)
             for col, label, url in zip(

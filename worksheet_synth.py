@@ -1,5 +1,5 @@
 """A python module for synthesizing semi-realistic images of worksheets
-from worksheet.sty with hand-writing scrawled on top.
+from gbworksheet.sty with hand-writing scrawled on top.
 
 The main impetus for this module is the creation of unit-tests
 for graderbot.py
@@ -19,12 +19,13 @@ _DEFAULT_FONT = str(Path(__file__).parent / "fonts" / "HomemadeApple-Regular.ttf
 _DEFAULT_TEXT_SIZE = 36
 _FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
 
-# worksheet.sty/questions.sty live at the repo root, not in the TeX
+# gbworksheet.sty/questions.sty live at the repo root, not in the TeX
 # distribution. latexmk/pdflatex must be able to find them even when the
 # .tex file being compiled lives elsewhere (e.g. app.py writes into
 # generated/<uuid>/), so point TEXINPUTS at the repo root. The trailing
 # "::" preserves the default kpathsea search path.
 _REPO_ROOT = Path(__file__).parent.resolve()
+WORKSHEET_STY_PATH = _REPO_ROOT / "gbworksheet.sty"
 
 
 def _texinputs_env() -> Dict[str, str]:

@@ -11,6 +11,7 @@ from moto import mock_aws
 from storage import (
     WorksheetRecord,
     _default_s3_client,
+    compute_sty_hash,
     generate_answer_key_pdf,
     generate_presigned_url,
     image_to_pdf,
@@ -18,9 +19,11 @@ from storage import (
     insert_worksheet,
     list_worksheets,
     parse_s3_url,
+    record_sty_version,
     store_worksheet,
     upload_to_s3,
 )
+from worksheet_synth import WORKSHEET_STY_PATH
 from worksheetbot import Question
 
 
@@ -34,6 +37,7 @@ def _sample_record(**overrides) -> WorksheetRecord:
         student_pdf_s3url="https://bucket.s3.amazonaws.com/student.pdf",
         cv_pdf_s3url="https://bucket.s3.amazonaws.com/cv.pdf",
         answers_pdf_s3url="https://bucket.s3.amazonaws.com/answers.pdf",
+        sty_hash="deadbeef",
         created_at=datetime.now(timezone.utc).isoformat(),
     )
     fields.update(overrides)
@@ -59,6 +63,7 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "student_pdf_s3url",
         "cv_pdf_s3url",
         "answers_pdf_s3url",
+        "sty_hash",
         "created_at",
     }
 
@@ -109,6 +114,42 @@ def test_init_db_drops_legacy_git_sha_column(tmp_path):
     assert "git_sha" not in columns
 
 
+def test_init_db_adds_sty_hash_column_to_pre_existing_table(tmp_path):
+    db_path = tmp_path / "worksheets.sqlite3"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE WORKSHEET (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            tex_source TEXT,
+            questions_json TEXT,
+            model TEXT,
+            num_questions INTEGER,
+            student_pdf_s3url TEXT,
+            cv_pdf_s3url TEXT,
+            answers_pdf_s3url TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = init_db(db_path)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    assert "sty_hash" in columns
+
+
+def test_init_db_creates_sty_version_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(STY_VERSION)")}
+
+    assert columns == {"hash", "content", "created_at"}
+
+
 def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
     record = _sample_record()
@@ -117,7 +158,7 @@ def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
 
     row = conn.execute(
         "SELECT prompt, tex_source, questions_json, model, num_questions, "
-        "student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, created_at "
+        "student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at "
         "FROM WORKSHEET WHERE id = ?",
         (new_id,),
     ).fetchone()
@@ -131,6 +172,7 @@ def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
         record.student_pdf_s3url,
         record.cv_pdf_s3url,
         record.answers_pdf_s3url,
+        record.sty_hash,
         record.created_at,
     )
 
@@ -146,6 +188,65 @@ def test_insert_worksheet_allows_null_pdf_urls(tmp_path):
         (new_id,),
     ).fetchone()
     assert row == (None, None)
+
+
+# --------------------------------------------------------------------------
+# compute_sty_hash / record_sty_version
+# --------------------------------------------------------------------------
+
+def test_compute_sty_hash_is_deterministic_for_same_content(tmp_path):
+    sty_path = tmp_path / "gbworksheet.sty"
+    sty_path.write_text(r"\ProvidesPackage{gbworksheet}[2026/07/08 Worksheet Layout]")
+
+    assert compute_sty_hash(sty_path) == compute_sty_hash(sty_path)
+
+
+def test_compute_sty_hash_differs_for_different_content(tmp_path):
+    sty_a = tmp_path / "a.sty"
+    sty_b = tmp_path / "b.sty"
+    sty_a.write_text("version one")
+    sty_b.write_text("version two")
+
+    assert compute_sty_hash(sty_a) != compute_sty_hash(sty_b)
+
+
+def test_record_sty_version_inserts_row_and_returns_hash(tmp_path):
+    sty_path = tmp_path / "gbworksheet.sty"
+    sty_path.write_text("version one")
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    sty_hash = record_sty_version(conn, sty_path)
+
+    assert sty_hash == compute_sty_hash(sty_path)
+    row = conn.execute(
+        "SELECT content FROM STY_VERSION WHERE hash = ?", (sty_hash,)
+    ).fetchone()
+    assert row == ("version one",)
+
+
+def test_record_sty_version_is_idempotent_for_unchanged_content(tmp_path):
+    sty_path = tmp_path / "gbworksheet.sty"
+    sty_path.write_text("version one")
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    record_sty_version(conn, sty_path)
+    record_sty_version(conn, sty_path)
+
+    count = conn.execute("SELECT COUNT(*) FROM STY_VERSION").fetchone()[0]
+    assert count == 1
+
+
+def test_record_sty_version_adds_new_row_when_content_changes(tmp_path):
+    sty_path = tmp_path / "gbworksheet.sty"
+    sty_path.write_text("version one")
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record_sty_version(conn, sty_path)
+
+    sty_path.write_text("version two")
+    record_sty_version(conn, sty_path)
+
+    count = conn.execute("SELECT COUNT(*) FROM STY_VERSION").fetchone()[0]
+    assert count == 2
 
 
 # --------------------------------------------------------------------------
@@ -261,10 +362,16 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/student.pdf"
     assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/cv.pdf"
     assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/answers.pdf"
+    assert record.sty_hash == compute_sty_hash()
 
     conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT prompt FROM WORKSHEET WHERE id = ?", (record.id,)).fetchone()
-    assert row == ("algebra worksheet",)
+    row = conn.execute("SELECT prompt, sty_hash FROM WORKSHEET WHERE id = ?", (record.id,)).fetchone()
+    assert row == ("algebra worksheet", record.sty_hash)
+
+    sty_row = conn.execute(
+        "SELECT content FROM STY_VERSION WHERE hash = ?", (record.sty_hash,)
+    ).fetchone()
+    assert sty_row == (WORKSHEET_STY_PATH.read_text(),)
 
 
 # --------------------------------------------------------------------------
