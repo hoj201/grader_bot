@@ -173,9 +173,19 @@ def choose_grid_columns(questions: list[Question]) -> int:
 def render_questions(questions: list[Question]) -> str:
     cols = choose_grid_columns(questions)
     if cols <= 1:
-        lines = [f"\\Question{{{escape_latex(q.id)}}}{{{q.text}}}" for q in questions]
-        return "\n".join(lines)
+        return _render_questions_vertical(questions)
     return _render_questions_grid(questions, cols)
+
+
+def _render_questions_vertical(questions: list[Question]) -> str:
+    # A bare "\n"-joined list of \Question{}{} calls is a single LaTeX
+    # paragraph (blank lines, not single newlines, separate paragraphs),
+    # so questions ran together instead of stacking one per line. An
+    # enumerate environment forces each onto its own line.
+    items = "\n".join(
+        f"    \\item \\Question{{{escape_latex(q.id)}}}{{{q.text}}}" for q in questions
+    )
+    return f"\\begin{{enumerate}}\n{items}\n\\end{{enumerate}}"
 
 
 def _render_questions_grid(questions: list[Question], cols: int) -> str:

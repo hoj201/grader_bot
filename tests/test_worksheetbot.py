@@ -85,7 +85,7 @@ def test_render_questions_uses_question_macro_with_id_and_text():
 
     tex = render_questions(questions)
 
-    assert tex == r"\Question{add001}{$7+5=$}"
+    assert tex == "\\begin{enumerate}\n    \\item \\Question{add001}{$7+5=$}\n\\end{enumerate}"
 
 
 def test_render_questions_does_not_escape_question_text():
@@ -93,7 +93,11 @@ def test_render_questions_does_not_escape_question_text():
 
     tex = render_questions(questions)
 
-    assert tex == r"\Question{frac001}{$\frac{1}{4}+\frac{1}{2}=$}"
+    assert tex == (
+        "\\begin{enumerate}\n"
+        "    \\item \\Question{frac001}{$\\frac{1}{4}+\\frac{1}{2}=$}\n"
+        "\\end{enumerate}"
+    )
 
 
 def test_render_questions_escapes_special_characters_in_id():
@@ -101,10 +105,10 @@ def test_render_questions_escapes_special_characters_in_id():
 
     tex = render_questions(questions)
 
-    assert tex == r"\Question{q\_1}{text}"
+    assert tex == "\\begin{enumerate}\n    \\item \\Question{q\\_1}{text}\n\\end{enumerate}"
 
 
-def test_render_questions_joins_multiple_questions_with_newlines():
+def test_render_questions_stacks_multiple_questions_in_an_enumerate():
     questions = [
         Question(id="1", text="a", answer="x"),
         Question(id="2", text="b", answer="y"),
@@ -112,7 +116,12 @@ def test_render_questions_joins_multiple_questions_with_newlines():
 
     tex = render_questions(questions)
 
-    assert tex == "\\Question{1}{a}\n\\Question{2}{b}"
+    assert tex == (
+        "\\begin{enumerate}\n"
+        "    \\item \\Question{1}{a}\n"
+        "    \\item \\Question{2}{b}\n"
+        "\\end{enumerate}"
+    )
 
 
 def test_estimate_question_width_counts_visible_characters():
