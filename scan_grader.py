@@ -19,23 +19,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Union
 
-from graderbot import Score, extract_name, grade_hw, load_image_rgb, read_worksheet_id
+from graderbot import QuestionResult, extract_name, grade_hw, load_image_rgb, read_worksheet_id
 from storage import deserialize_boxes, get_worksheet_by_public_id, init_db
 
 _NAME_BOX_ID = "name"
+
+# Per-student grading: question id -> QuestionResult (answer/response/correct).
+StudentResults = Dict[str, QuestionResult]
 
 
 @dataclass
 class ScanBatchResult:
     """Outcome of grading a pile of scans.
 
-    - `scores_by_worksheet`: decoded worksheet id -> {student name -> Score}.
+    - `results_by_worksheet`: decoded worksheet id -> {student name -> per-question
+      results}, where the per-question results are {question id -> QuestionResult}.
     - `unreadable`: scan paths whose QR id could not be decoded.
     - `unknown_worksheets`: decoded id -> scan paths, for ids with no matching
       (or incompletely stored) database row.
     """
 
-    scores_by_worksheet: Dict[str, Dict[str, Score]] = field(default_factory=dict)
+    results_by_worksheet: Dict[str, Dict[str, StudentResults]] = field(default_factory=dict)
     unreadable: List[str] = field(default_factory=list)
     unknown_worksheets: Dict[str, List[str]] = field(default_factory=dict)
 
@@ -74,11 +78,11 @@ def grade_scans(
                 qid: box for qid, box in boxes.items() if qid != _NAME_BOX_ID
             }
 
-            student_scores: Dict[str, Score] = {}
+            student_results: Dict[str, StudentResults] = {}
             for _hw, image in items:
                 name = extract_name(image, name_box, roster) if name_box is not None else ""
-                student_scores[name] = grade_hw(answer_key, question_boxes, image)
-            result.scores_by_worksheet[worksheet_id] = student_scores
+                student_results[name] = grade_hw(answer_key, question_boxes, image)
+            result.results_by_worksheet[worksheet_id] = student_results
 
         return result
     finally:

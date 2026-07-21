@@ -3,7 +3,7 @@ import json
 import pytest
 
 import scan_grader
-from graderbot import Box, Score
+from graderbot import Box, QuestionResult
 from scan_grader import grade_scans
 from storage import init_db, insert_worksheet, serialize_boxes
 from tests.test_storage import _sample_record
@@ -67,7 +67,11 @@ def patched_cv(monkeypatch):
 
     def fake_grade_hw(answer_key, boxes, image):
         grade_hw_calls.append({"answer_key": answer_key, "boxes": boxes, "image": image})
-        return Score(correct=len(answer_key), attempted=len(boxes), total_questions=len(answer_key))
+        # A perfect paper: response == answer for every question box.
+        return {
+            qid: QuestionResult(answer=answer_key[qid], response=answer_key[qid], correct=True)
+            for qid in boxes
+        }
 
     monkeypatch.setattr(scan_grader, "grade_hw", fake_grade_hw)
     return grade_hw_calls
@@ -80,9 +84,9 @@ def test_grade_scans_groups_by_worksheet_id(db_with_two_worksheets, patched_cv):
         db_path=db_with_two_worksheets,
     )
 
-    assert set(result.scores_by_worksheet) == {"ws_1", "ws_2"}
-    assert set(result.scores_by_worksheet["ws_1"]) == {"Alice Smith", "Bob Jones"}
-    assert set(result.scores_by_worksheet["ws_2"]) == {"Carol White"}
+    assert set(result.results_by_worksheet) == {"ws_1", "ws_2"}
+    assert set(result.results_by_worksheet["ws_1"]) == {"Alice Smith", "Bob Jones"}
+    assert set(result.results_by_worksheet["ws_2"]) == {"Carol White"}
 
 
 def test_grade_scans_uses_stored_answer_key_and_excludes_name_box(
@@ -96,22 +100,25 @@ def test_grade_scans_uses_stored_answer_key_and_excludes_name_box(
     assert set(call["boxes"]) == {"q1", "q2"}
 
 
-def test_grade_scans_scores_reflect_stored_key(db_with_two_worksheets, patched_cv):
+def test_grade_scans_results_are_per_question(db_with_two_worksheets, patched_cv):
     result = grade_scans(["alice.png"], roster=["Alice Smith"], db_path=db_with_two_worksheets)
 
-    score = result.scores_by_worksheet["ws_1"]["Alice Smith"]
-    assert score == Score(correct=2, attempted=2, total_questions=2)
+    student = result.results_by_worksheet["ws_1"]["Alice Smith"]
+    assert student == {
+        "q1": QuestionResult(answer="2", response="2", correct=True),
+        "q2": QuestionResult(answer="4", response="4", correct=True),
+    }
 
 
 def test_grade_scans_collects_unreadable_scans(db_with_two_worksheets, patched_cv):
     result = grade_scans(["alice.png", "blank.png"], roster=["Alice Smith"], db_path=db_with_two_worksheets)
 
     assert result.unreadable == ["blank.png"]
-    assert "Alice Smith" in result.scores_by_worksheet["ws_1"]
+    assert "Alice Smith" in result.results_by_worksheet["ws_1"]
 
 
 def test_grade_scans_collects_unknown_worksheet_ids(db_with_two_worksheets, patched_cv):
     result = grade_scans(["ghost.png"], roster=[], db_path=db_with_two_worksheets)
 
     assert result.unknown_worksheets == {"ws_gone": ["ghost.png"]}
-    assert result.scores_by_worksheet == {}
+    assert result.results_by_worksheet == {}

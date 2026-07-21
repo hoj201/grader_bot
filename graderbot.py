@@ -26,10 +26,10 @@ class Box:
     height: float
 
 @dataclass(frozen=True)
-class Score:
-    correct: int
-    attempted: int
-    total_questions: int
+class QuestionResult:
+    answer: str    # the stored correct answer (LaTeX)
+    response: str  # what the student wrote, as OCR'd (LaTeX; "" if blank)
+    correct: bool
 
 _RED = (1, 0, 0)
 _RED_TOLERANCE = 0.15
@@ -62,16 +62,19 @@ def extract_name(image: np.ndarray, box: Box, roster: List[LiteralString]) -> Li
     matches = difflib.get_close_matches(ocr_text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
     return matches[0] if matches else ""
 
-def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, Box], hw_image: np.ndarray) -> Score:
-    correct, attempted = 0, 0
+def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, Box], hw_image: np.ndarray) -> Dict[LiteralString, QuestionResult]:
+    """Grades a single student's work, returning a per-question breakdown
+    keyed by question id: for each box, the stored `answer`, the student's
+    OCR'd `response`, and whether they match. This granularity is what a
+    marked-up feedback PDF needs (issue #24)."""
+    results: Dict[LiteralString, QuestionResult] = {}
     for qid, box in boxes.items():
         response = read_box(hw_image, box)
-        if response != "":
-            attempted += 1
         answer = answer_key[qid]
-        if is_correct(response, answer):
-            correct += 1
-    return Score(correct=correct, attempted=attempted, total_questions=len(answer_key))
+        results[qid] = QuestionResult(
+            answer=answer, response=response, correct=is_correct(response, answer)
+        )
+    return results
 
 _ANSWER_FRAC_PATTERN = re.compile(r"^\\frac\{(-?\d+)\}\{(-?\d+)\}$")
 _DECIMAL_PLACES = 3

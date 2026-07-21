@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot import align_document_image, extract_answer_boxes, extract_name, is_correct, load_image_rgb, read_box
+from graderbot import Box, QuestionResult, align_document_image, extract_answer_boxes, extract_name, grade_hw, is_correct, load_image_rgb, read_box
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
@@ -167,6 +167,34 @@ def test_extract_name_matches_closest_roster_name(boxes):
 )
 def test_is_correct(response, answer, expected):
     assert is_correct(response, answer) == expected
+
+
+def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypatch):
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05), "q2": Box(0.1, 0.4, 0.3, 0.05)}
+    answer_key = {"q1": "12", "q2": "8"}
+    responses = {"q1": "12", "q2": "7"}  # q1 right, q2 wrong
+
+    def fake_read_box(image, box):
+        qid = next(qid for qid, b in boxes.items() if b is box)
+        return responses[qid]
+
+    monkeypatch.setattr("graderbot.read_box", fake_read_box)
+
+    results = grade_hw(answer_key, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert results == {
+        "q1": QuestionResult(answer="12", response="12", correct=True),
+        "q2": QuestionResult(answer="8", response="7", correct=False),
+    }
+
+
+def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05)}
+    monkeypatch.setattr("graderbot.read_box", lambda image, box: "")
+
+    results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert results == {"q1": QuestionResult(answer="12", response="", correct=False)}
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
