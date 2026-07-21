@@ -31,6 +31,19 @@
 \def\worksheet@markerdirectory{aruco_images}
 \def\worksheet@frameinset{0.85in}
 
+% Worksheet id, embedded on the page as a QR code (issue #11). Empty by
+% default so worksheets without an id (e.g. demo.tex) still compile. When set,
+% a PNG named qr_<id>.png must be present in the compile directory.
+\def\worksheet@id{}
+\def\worksheet@qrsize{0.8in}
+\def\worksheet@qrinset{0.15in}
+% In cv mode, a locator box is drawn around the QR code so graderbot can find
+% the QR region. It must NOT be red: extract_answer_boxes treats red rectangles
+% as answer boxes, so the QR locator uses a distinct color.
+\def\worksheet@qrcvcolor{blue}
+\def\worksheet@qrcvlinewidth{2pt}
+\def\worksheet@qrcvpadding{2pt}
+
 \def\worksheet@markerTL{0}
 \def\worksheet@markerTR{1}
 \def\worksheet@markerBL{2}
@@ -58,6 +71,8 @@
     marker size/.store in=\worksheet@markersize,
     marker inset/.store in=\worksheet@markerinset,
     marker directory/.store in=\worksheet@markerdirectory,
+    worksheet id/.store in=\worksheet@id,
+    qr cv color/.store in=\worksheet@qrcvcolor,
     frame inset/.store in=\worksheet@frameinset,
     top left marker/.store in=\worksheet@markerTL,
     top right marker/.store in=\worksheet@markerTR,
@@ -139,6 +154,33 @@
         {south east}
         {($(current page.south east)+(-\worksheet@markerinset,\worksheet@markerinset)$)}
         {\worksheet@markerBR}
+
+    % Worksheet id QR code, top-center in the top margin, clear of the four
+    % corner registration markers. Only drawn when an id has been set.
+    \ifx\worksheet@id\empty\else
+        \node[
+            anchor=north,
+            inner sep=0pt
+        ] (worksheet@qrnode) at ($(current page.north)+(0,-\worksheet@qrinset)$)
+        {
+            \includegraphics[
+                width=\worksheet@qrsize,
+                height=\worksheet@qrsize
+            ]
+            {qr_\worksheet@id}
+        };
+        % In cv mode, outline the QR with a locator box so graderbot can find
+        % the QR region on an aligned scan.
+        \ifworksheet@cvmode
+            \draw[
+                draw=\worksheet@qrcvcolor,
+                line width=\worksheet@qrcvlinewidth
+            ]
+            ($(worksheet@qrnode.north west)+(-\worksheet@qrcvpadding,\worksheet@qrcvpadding)$)
+            rectangle
+            ($(worksheet@qrnode.south east)+(\worksheet@qrcvpadding,-\worksheet@qrcvpadding)$);
+        \fi
+    \fi
 
 \end{tikzpicture}
 }

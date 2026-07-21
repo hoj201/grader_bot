@@ -62,6 +62,7 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "model",
         "num_questions",
         "title",
+        "public_id",
         "student_pdf_s3url",
         "cv_pdf_s3url",
         "answers_pdf_s3url",

@@ -35,6 +35,7 @@ class WorksheetRecord:
     model: str
     num_questions: int
     title: Optional[str] = None
+    public_id: Optional[str] = None
     student_pdf_s3url: Optional[str] = None
     cv_pdf_s3url: Optional[str] = None
     answers_pdf_s3url: Optional[str] = None
@@ -60,6 +61,7 @@ def init_db(db_path: Path) -> Connection:
             model TEXT,
             num_questions INTEGER,
             title TEXT,
+            public_id TEXT,
             student_pdf_s3url TEXT,
             cv_pdf_s3url TEXT,
             answers_pdf_s3url TEXT,
@@ -84,6 +86,8 @@ def init_db(db_path: Path) -> Connection:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN sty_hash TEXT")
     if "title" not in columns:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN title TEXT")
+    if "public_id" not in columns:
+        conn.execute("ALTER TABLE WORKSHEET ADD COLUMN public_id TEXT")
     conn.commit()
     return conn
 
@@ -93,8 +97,9 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
         """
         INSERT INTO WORKSHEET
             (prompt, tex_source, questions_json, model, num_questions, title,
-             student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             public_id, student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url,
+             sty_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
@@ -103,6 +108,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.model,
             record.num_questions,
             record.title,
+            record.public_id,
             record.student_pdf_s3url,
             record.cv_pdf_s3url,
             record.answers_pdf_s3url,
@@ -118,7 +124,8 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
     rows = conn.execute(
         """
         SELECT id, prompt, tex_source, questions_json, model, num_questions, title,
-               student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at
+               public_id, student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url,
+               sty_hash, created_at
         FROM WORKSHEET
         ORDER BY created_at DESC
         """
@@ -132,11 +139,12 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
             model=row[4],
             num_questions=row[5],
             title=row[6],
-            student_pdf_s3url=row[7],
-            cv_pdf_s3url=row[8],
-            answers_pdf_s3url=row[9],
-            sty_hash=row[10],
-            created_at=row[11],
+            public_id=row[7],
+            student_pdf_s3url=row[8],
+            cv_pdf_s3url=row[9],
+            answers_pdf_s3url=row[10],
+            sty_hash=row[11],
+            created_at=row[12],
         )
         for row in rows
     ]
@@ -237,6 +245,7 @@ def store_worksheet(
     bucket: str,
     db_path: Path,
     title: Optional[str] = None,
+    public_id: Optional[str] = None,
     s3_client=None,
 ) -> WorksheetRecord:
     tex_path = Path(tex_path)
@@ -270,6 +279,7 @@ def store_worksheet(
         model=model,
         num_questions=len(questions),
         title=title,
+        public_id=public_id,
         student_pdf_s3url=student_url,
         cv_pdf_s3url=cv_url,
         answers_pdf_s3url=answers_url,

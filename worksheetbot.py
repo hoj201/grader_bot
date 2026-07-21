@@ -33,10 +33,12 @@ from typing import Callable, Optional
 import anthropic
 
 import storage
+from worksheet_qr import generate_worksheet_id, render_qr_png
 from worksheet_synth import _texinputs_env
 
 MODEL = "claude-sonnet-4-6"
 QUESTIONS_MARKER = "%%QUESTIONS%%"
+WORKSHEET_ID_MARKER = "%%WORKSHEET_ID%%"
 
 OnStep = Callable[[str, Optional[str]], None]
 
@@ -284,7 +286,9 @@ def _render_questions_grid(questions: list[Question], cols: int) -> str:
     )
 
 
-def fill_template(template_path: Path, questions_tex: str) -> str:
+def fill_template(
+    template_path: Path, questions_tex: str, worksheet_id: Optional[str] = None
+) -> str:
     template = template_path.read_text()
     if QUESTIONS_MARKER not in template:
         raise ValueError(
@@ -292,7 +296,17 @@ def fill_template(template_path: Path, questions_tex: str) -> str:
             f"Add a line containing exactly {QUESTIONS_MARKER} where "
             f"questions should be inserted."
         )
-    return template.replace(QUESTIONS_MARKER, questions_tex)
+    filled = template.replace(QUESTIONS_MARKER, questions_tex)
+
+    # Embed the worksheet id (issue #11). Replace the marker with a
+    # \WorksheetSetup line when an id is given, otherwise strip the marker so
+    # templates lacking an id still compile. Templates without the marker are
+    # left untouched for backward compatibility.
+    id_setup = (
+        rf"\WorksheetSetup{{worksheet id={worksheet_id}}}" if worksheet_id else ""
+    )
+    filled = filled.replace(WORKSHEET_ID_MARKER, id_setup)
+    return filled
 
 
 # --------------------------------------------------------------------------
@@ -375,14 +389,20 @@ def generate_worksheet(
     """
     questions = generate_questions(client, prompt, num_questions, on_step=on_step)
 
+    public_id = generate_worksheet_id()
     questions_tex = render_questions(questions)
-    tex_source = fill_template(template_path, questions_tex)
+    tex_source = fill_template(template_path, questions_tex, worksheet_id=public_id)
 
     out = Path(out)
     out_dir = out.parent if out.parent != Path("") else Path(".")
     out_dir.mkdir(parents=True, exist_ok=True)
     tex_path = out_dir / f"{out.name}.tex"
     tex_path.write_text(tex_source)
+
+    # Render the QR code the LaTeX embeds. The filename must match the
+    # \includegraphics{qr_<id>} in gbworksheet.sty, and it lives next to the
+    # .tex so every compile (student/cv/answer-key) can find it.
+    render_qr_png(public_id, out_dir / f"qr_{public_id}.png")
 
     for attempt in range(max_repairs + 1):
         on_step(f"Compiling (attempt {attempt + 1})...")
@@ -402,6 +422,7 @@ def generate_worksheet(
                     bucket=bucket,
                     db_path=db_path,
                     title=title,
+                    public_id=public_id,
                 )
                 on_step(f"Stored worksheet id={record.id}")
                 on_step(

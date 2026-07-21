@@ -14,6 +14,8 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 
+from worksheet_qr import decode_worksheet_id
+
 load_dotenv()
 
 @dataclass(frozen=True)
@@ -237,6 +239,13 @@ def read_box(image: np.ndarray, box: Box) -> str:
     already-loaded RGB numpy array, e.g. from `load_image_rgb`)."""
     cropped = _crop_box(image, box, _BOX_INSET)
     return _mathpix_ocr(cropped)
+
+
+def read_worksheet_id(image: np.ndarray) -> Optional[str]:
+    """Decodes the embedded worksheet id from the QR code on a scanned
+    worksheet `image` (an RGB or BGR numpy array). Returns the id string, or
+    `None` if no QR code is found. See issue #11 / `worksheet_qr`."""
+    return decode_worksheet_id(image)
 
 
 _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)

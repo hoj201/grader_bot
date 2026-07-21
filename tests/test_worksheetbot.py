@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -284,6 +284,7 @@ def test_generate_worksheet_stores_when_bucket_given(tmp_path):
         bucket="my-bucket",
         db_path=db_path,
         title="Auto Title",
+        public_id=ANY,
     )
     assert record is fake_record
 
@@ -324,6 +325,7 @@ def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path)
         bucket="my-bucket",
         db_path=db_path,
         title="Given Title",
+        public_id=ANY,
     )
 
 
