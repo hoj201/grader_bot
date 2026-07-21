@@ -66,6 +66,10 @@ Rules:
 - Write question text as real LaTeX math notation, delimited with $...$
   (e.g. "$x^2 + 3x - 4 = 0$", "$\\frac{1}{4}+\\frac{1}{2}=$"). It is inserted
   into the worksheet .tex source verbatim, so it must be valid LaTeX.
+- You are writing LaTeX inside a JSON string, so every backslash in a LaTeX
+  command must be written as two backslashes so the JSON parses correctly:
+  \\times, \\div, \\left, \\right, \\cdot, \\le, \\ge, \\sqrt, etc. A single
+  backslash (e.g. "\times") produces invalid JSON and will be rejected.
 - Answers must be a plain number (e.g. "12", "1.5") or a LaTeX fraction
   written as \\frac{a}{b} (e.g. "\\frac{3}{4}") — never a bare "a/b" slash
   expression, and never a worked solution or justification.
@@ -94,10 +98,44 @@ def generate_questions(client: anthropic.Anthropic, prompt: str, num_questions: 
     return questions
 
 
+_VALID_JSON_ESCAPE_RE = re.compile(r'\\u[0-9a-fA-F]{4}|\\["\\/]')
+
+
+def _escape_stray_backslashes(text: str) -> str:
+    """Doubles backslashes that don't form a pre-existing JSON escape.
+
+    The LLM is asked to emit LaTeX (full of backslashes) inside JSON
+    strings; it sometimes forgets to double them (e.g. "\\times" instead
+    of "\\\\times"), which json.loads rejects with "Invalid \\escape".
+    Only \\\\, \\", \\/ and \\uXXXX are treated as intentional escapes here
+    (not \\b \\f \\n \\r \\t) since this pipeline only ever produces LaTeX,
+    which has no legitimate use for a literal tab/newline/etc. and commonly
+    starts commands with those letters (\\times, \\frac, \\right, ...).
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        if text[i] == "\\":
+            match = _VALID_JSON_ESCAPE_RE.match(text, i)
+            if match:
+                out.append(match.group())
+                i = match.end()
+            else:
+                out.append("\\\\")
+                i += 1
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
 def _parse_json_array(raw: str) -> list[dict]:
     cleaned = raw.strip()
     cleaned = re.sub(r"^```(json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return json.loads(_escape_stray_backslashes(cleaned))
 
 
 # --------------------------------------------------------------------------

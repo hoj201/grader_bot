@@ -51,6 +51,19 @@ def test_generate_questions_strips_markdown_code_fences():
     assert questions == [Question(id="1", text="x + 1 = 2", answer="1")]
 
 
+def test_generate_questions_repairs_unescaped_latex_backslashes():
+    # The model sometimes forgets to double LaTeX backslashes, e.g. it emits
+    # a literal "\div" instead of "\\div". "\d" isn't a valid JSON escape,
+    # so json.loads raises "Invalid \escape" and the whole request used to
+    # blow up with no recovery.
+    raw_text = r'[{"id": "1", "text": "$8 \div 4 = ?$", "answer": "2"}]'
+    client = _fake_client(raw_text)
+
+    questions = generate_questions(client, "division worksheet", 1)
+
+    assert questions == [Question(id="1", text=r"$8 \div 4 = ?$", answer="2")]
+
+
 def test_generate_questions_warns_on_count_mismatch(capsys):
     data = [{"id": "1", "text": "1 + 1 = ?", "answer": "2"}]
     client = _fake_client(json.dumps(data))
