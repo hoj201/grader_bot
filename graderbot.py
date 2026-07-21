@@ -177,9 +177,13 @@ def load_image_rgb(image_fn: str) -> np.ndarray:
     return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
 
-def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
-    image_height, image_width = image.shape[:2]
-
+def box_pixel_rect(
+    box: Box, image_width: int, image_height: int, inset: float = 0.0
+) -> Tuple[int, int, int, int]:
+    """Maps a `Box` (relative coords, origin bottom-left) to a pixel rectangle
+    `(x0, y0, x1, y1)` on an `image_width` x `image_height` image (origin
+    top-left, so the y axis is flipped). `inset` shrinks the rectangle inward by
+    that fraction of the box's own width/height on each side."""
     left = box.x_lower_left + inset * box.width
     right = box.x_lower_left + box.width - inset * box.width
     top = 1 - box.y_lower_left - box.height + inset * box.height
@@ -187,6 +191,12 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
 
     x0, x1 = round(left * image_width), round(right * image_width)
     y0, y1 = round(top * image_height), round(bottom * image_height)
+    return x0, y0, x1, y1
+
+
+def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
+    image_height, image_width = image.shape[:2]
+    x0, y0, x1, y1 = box_pixel_rect(box, image_width, image_height, inset)
     return image[y0:y1, x0:x1]
 
 
@@ -244,6 +254,14 @@ _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
 _MARKER_ID_TL, _MARKER_ID_TR, _MARKER_ID_BL, _MARKER_ID_BR = 0, 1, 2, 3
 _REGISTRATION_MARKER_IDS = (_MARKER_ID_TL, _MARKER_ID_TR, _MARKER_ID_BL, _MARKER_ID_BR)
 _WORKSHEET_RENDER_DPI = 150
+
+# Canonical worksheet page geometry, mirroring gbworksheet.sty (letter paper,
+# marker inset 0.15in, marker size 0.75in). Each corner marker's center sits
+# inset + size/2 in from its page corner. Used to rectify a scan to a canonical
+# page without a reference PDF (see rectify_to_canonical).
+_PAGE_WIDTH_IN, _PAGE_HEIGHT_IN = 8.5, 11.0
+_MARKER_INSET_IN = 0.15
+_MARKER_SIZE_IN = 0.75
 
 
 def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, page_index: int = 0) -> np.ndarray:
@@ -316,3 +334,39 @@ def align_document_image(image_filename: str, worksheet_filename: str) -> np.nda
     aligned = cv2.warpPerspective(photo, homography, (target_width, target_height))
 
     return cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB)
+
+
+def _canonical_marker_centers(width_px: int, height_px: int, dpi: int) -> Dict[int, Tuple[float, float]]:
+    offset = (_MARKER_INSET_IN + _MARKER_SIZE_IN / 2) * dpi
+    return {
+        _MARKER_ID_TL: (offset, offset),
+        _MARKER_ID_TR: (width_px - offset, offset),
+        _MARKER_ID_BL: (offset, height_px - offset),
+        _MARKER_ID_BR: (width_px - offset, height_px - offset),
+    }
+
+
+def rectify_to_canonical(image: np.ndarray, dpi: int = _WORKSHEET_RENDER_DPI) -> np.ndarray:
+    """Warps a scanned worksheet `image` (a numpy array with the four corner
+    aruco markers) to a canonical letter-page frame, so that stored normalized
+    box coordinates map directly onto it. Unlike `align_document_image`, this
+    needs no reference PDF -- the destination marker centers come from the fixed
+    worksheet geometry in gbworksheet.sty. Returns the rectified image in the
+    same channel order it was given; exposed border areas are filled white."""
+    source_centers = _detect_marker_centers(image, "scan")
+
+    width_px = round(_PAGE_WIDTH_IN * dpi)
+    height_px = round(_PAGE_HEIGHT_IN * dpi)
+    canonical_centers = _canonical_marker_centers(width_px, height_px, dpi)
+
+    src_points = np.array(
+        [source_centers[m] for m in _REGISTRATION_MARKER_IDS], dtype=np.float32
+    )
+    dst_points = np.array(
+        [canonical_centers[m] for m in _REGISTRATION_MARKER_IDS], dtype=np.float32
+    )
+
+    homography, _ = cv2.findHomography(src_points, dst_points)
+    return cv2.warpPerspective(
+        image, homography, (width_px, height_px), borderValue=(255, 255, 255)
+    )

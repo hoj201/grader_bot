@@ -8,7 +8,21 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot import Box, QuestionResult, align_document_image, extract_answer_boxes, extract_name, grade_hw, is_correct, load_image_rgb, read_box
+from graderbot import (
+    Box,
+    QuestionResult,
+    _canonical_marker_centers,
+    _detect_marker_centers,
+    align_document_image,
+    box_pixel_rect,
+    extract_answer_boxes,
+    extract_name,
+    grade_hw,
+    is_correct,
+    load_image_rgb,
+    read_box,
+    rectify_to_canonical,
+)
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
@@ -195,6 +209,66 @@ def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
     assert results == {"q1": QuestionResult(answer="12", response="", correct=False)}
+
+
+def test_box_pixel_rect_full_page_box_covers_whole_image():
+    assert box_pixel_rect(Box(0.0, 0.0, 1.0, 1.0), 100, 200) == (0, 0, 100, 200)
+
+
+def test_box_pixel_rect_maps_relative_box_with_y_flipped():
+    # Box origin is bottom-left; image origin is top-left, so y is flipped.
+    rect = box_pixel_rect(Box(0.25, 0.5, 0.5, 0.25), 100, 200)
+    assert rect == (25, 50, 75, 100)
+
+
+def _make_canonical_worksheet_image(dpi):
+    """A white letter page with the four corner aruco markers placed exactly
+    where gbworksheet.sty puts them (so their centers are canonical)."""
+    width = round(8.5 * dpi)
+    height = round(11 * dpi)
+    size_px = round(0.75 * dpi)
+    inset_px = round(0.15 * dpi)
+    image = np.full((height, width, 3), 255, dtype=np.uint8)
+    corners = {
+        0: (inset_px, inset_px),
+        1: (width - inset_px - size_px, inset_px),
+        2: (inset_px, height - inset_px - size_px),
+        3: (width - inset_px - size_px, height - inset_px - size_px),
+    }
+    for marker_id, (px, py) in corners.items():
+        marker = cv2.aruco.generateImageMarker(_ARUCO_DICTIONARY, marker_id, size_px)
+        image[py:py + size_px, px:px + size_px] = cv2.cvtColor(marker, cv2.COLOR_GRAY2RGB)
+    return image
+
+
+def test_rectify_to_canonical_maps_markers_to_canonical_positions():
+    dpi = 100
+    canonical = _make_canonical_worksheet_image(dpi)
+    height, width = canonical.shape[:2]
+
+    # Simulate a skewed photo via a perspective warp of the canonical page.
+    src = np.array([[0, 0], [width, 0], [0, height], [width, height]], dtype=np.float32)
+    inset = 0.03 * min(width, height)
+    dst = np.array(
+        [
+            [inset, 0.5 * inset],
+            [width - 1.5 * inset, inset],
+            [0.7 * inset, height - inset],
+            [width - inset, height - 1.2 * inset],
+        ],
+        dtype=np.float32,
+    )
+    skewed = cv2.warpPerspective(
+        canonical, cv2.getPerspectiveTransform(src, dst), (width, height), borderValue=(255, 255, 255)
+    )
+
+    rectified = rectify_to_canonical(skewed, dpi=dpi)
+
+    centers = _detect_marker_centers(rectified, "rectified")
+    expected = _canonical_marker_centers(rectified.shape[1], rectified.shape[0], dpi)
+    for marker_id in (0, 1, 2, 3):
+        assert centers[marker_id][0] == pytest.approx(expected[marker_id][0], abs=3.0)
+        assert centers[marker_id][1] == pytest.approx(expected[marker_id][1], abs=3.0)
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png):
