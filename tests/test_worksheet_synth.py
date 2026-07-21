@@ -2,6 +2,7 @@ from pathlib import Path
 
 import fitz
 import numpy as np
+import pytest
 
 from graderbot import extract_answer_boxes
 from worksheet_synth import (
@@ -125,31 +126,28 @@ def _box_region(image: np.ndarray, box) -> np.ndarray:
     return image[y0:y1, x0:x1]
 
 
-def test_fill_worksheet_draws_plain_answer_into_its_box():
-    filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
-
+@pytest.fixture(scope="module")
+def boxes():
     cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
-    boxes = extract_answer_boxes(cv_worksheet)
+    return extract_answer_boxes(cv_worksheet)
+
+
+def test_fill_worksheet_draws_plain_answer_into_its_box(boxes):
+    filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
 
     filled_region = _box_region(filled, boxes["add001"])
     assert not np.all(filled_region == 255)
 
 
-def test_fill_worksheet_draws_fraction_into_its_box():
+def test_fill_worksheet_draws_fraction_into_its_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {"sub001": r"\frac{3}{5}"})
-
-    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
-    boxes = extract_answer_boxes(cv_worksheet)
 
     filled_region = _box_region(filled, boxes["sub001"])
     assert not np.all(filled_region == 255)
 
 
-def test_fill_worksheet_draws_student_name_into_name_box():
+def test_fill_worksheet_draws_student_name_into_name_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
-
-    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
-    boxes = extract_answer_boxes(cv_worksheet)
 
     assert "name" in boxes
     filled_region = _box_region(filled, boxes["name"])

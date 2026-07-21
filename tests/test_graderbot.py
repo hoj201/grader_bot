@@ -97,13 +97,16 @@ def demo_pdf(tmp_path_factory):
     return build_dir / "demo.pdf"
 
 
-def test_extract_answer_boxes_finds_all_ids(demo_pdf):
-    boxes = extract_answer_boxes(str(demo_pdf))
+@pytest.fixture(scope="module")
+def boxes(demo_pdf):
+    return extract_answer_boxes(str(demo_pdf))
+
+
+def test_extract_answer_boxes_finds_all_ids(boxes):
     assert set(boxes) == {"name", "add001", "sub001", "frac001"}
 
 
-def test_extract_answer_boxes_coordinates_are_relative(demo_pdf):
-    boxes = extract_answer_boxes(str(demo_pdf))
+def test_extract_answer_boxes_coordinates_are_relative(boxes):
     for box in boxes.values():
         assert 0 <= box.x_lower_left <= 1
         assert 0 <= box.y_lower_left <= 1
@@ -111,29 +114,25 @@ def test_extract_answer_boxes_coordinates_are_relative(demo_pdf):
         assert 0 < box.height <= 1
 
 
-def test_extract_answer_boxes_sub001_is_below_add001(demo_pdf):
-    boxes = extract_answer_boxes(str(demo_pdf))
+def test_extract_answer_boxes_sub001_is_below_add001(boxes):
     assert boxes["sub001"].y_lower_left < boxes["add001"].y_lower_left
 
 
-def test_read_box_reads_handwritten_answers(demo_pdf):
+def test_read_box_reads_handwritten_answers(boxes):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
 
-    boxes = extract_answer_boxes(str(demo_pdf))
     answer_key_image = load_image_rgb(str(DEMO_ANSWER_KEY_PDF))
 
     assert read_box(answer_key_image, boxes["add001"]) == "12"
     assert read_box(answer_key_image, boxes["sub001"]) == "11"
 
 
-def test_read_box_reads_a_handwritten_fraction(demo_pdf):
+def test_read_box_reads_a_handwritten_fraction(boxes):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
-
-    boxes = extract_answer_boxes(str(demo_pdf))
 
     filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
@@ -141,13 +140,11 @@ def test_read_box_reads_a_handwritten_fraction(demo_pdf):
     assert read_box(filled_image, boxes["frac001"]) == r"\frac{3}{4}"
 
 
-def test_extract_name_matches_closest_roster_name(demo_pdf):
+def test_extract_name_matches_closest_roster_name(boxes):
     if shutil.which("tesseract") is None:
         pytest.skip("tesseract is not installed")
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
-
-    boxes = extract_answer_boxes(str(demo_pdf))
 
     filled_image_bgr = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
