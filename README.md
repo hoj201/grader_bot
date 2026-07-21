@@ -110,6 +110,20 @@ set -a; source .env; set +a
 litestream replicate -config litestream.yml
 ```
 
+### Mathpix OCR logging
+To build a labelled dataset for a future in-house OCR model (issue #1), every
+Mathpix call made by `read_box` can be logged: the exact PNG posted to Mathpix
+is stored in S3 (content-addressed as `mathpix/<sha256>.png`) and a
+`MATHPIX_CALL` row (image URL, image hash, raw Mathpix response JSON, and parsed
+answer text) is written to the SQLite DB. This is opt-in and self-gating: it
+does nothing unless a bucket is configured via `MATHPIX_LOG_BUCKET` (falling
+back to `S3_BUCKET`), and it reuses `WORKSHEETS_DB_PATH` for the database.
+Logging failures are non-fatal — they never interrupt OCR or grading. Set in
+`.env`:
+```
+MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
+```
+
 ## Web frontend
 [app.py](./app.py) is a Streamlit app with two tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via

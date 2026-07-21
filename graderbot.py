@@ -232,8 +232,16 @@ def _mathpix_ocr(image: np.ndarray) -> str:
         json={"src": data_uri, "formats": ["text"], "rm_spaces": True},
     )
     response.raise_for_status()
-    text = _strip_math_delimiters(response.json().get("text", ""))
-    return _fix_stray_slashes(text)
+    raw = response.json()
+    text = _fix_stray_slashes(_strip_math_delimiters(raw.get("text", "")))
+
+    # Log the exact bytes posted plus the raw response for a future OCR
+    # training set (issue #1). Self-gates on env config and is non-fatal.
+    from mathpix_log import log_mathpix_call
+
+    log_mathpix_call(encoded.tobytes(), raw, text)
+
+    return text
 
 
 def read_box(image: np.ndarray, box: Box) -> str:

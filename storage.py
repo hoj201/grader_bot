@@ -82,6 +82,22 @@ def init_db(db_path: Path) -> Connection:
         )
         """
     )
+    # One row per Mathpix OCR call (issue #1), so we can compile a labelled
+    # dataset for a future in-house OCR model. The image itself lives in S3
+    # (image_s3url); image_sha256 is the content hash used both as the S3 key
+    # and to dedupe/join identical crops.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS MATHPIX_CALL (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_s3url TEXT,
+            image_sha256 TEXT,
+            response_json TEXT,
+            response_text TEXT,
+            created_at TEXT
+        )
+        """
+    )
     columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
     if "git_sha" in columns:
         conn.execute("ALTER TABLE WORKSHEET DROP COLUMN git_sha")
@@ -121,6 +137,28 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.sty_hash,
             record.created_at,
         ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def insert_mathpix_call(
+    conn: Connection,
+    image_s3url: str,
+    image_sha256: str,
+    response_json: str,
+    response_text: str,
+    created_at: str,
+) -> int:
+    """Records a single Mathpix OCR call in the MATHPIX_CALL table (issue #1)
+    and returns the new row id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO MATHPIX_CALL
+            (image_s3url, image_sha256, response_json, response_text, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (image_s3url, image_sha256, response_json, response_text, created_at),
     )
     conn.commit()
     return cursor.lastrowid
