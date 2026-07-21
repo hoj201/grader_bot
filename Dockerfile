@@ -30,6 +30,10 @@ RUN poetry install --only main --no-root --no-interaction
 
 COPY . .
 
+# Marker images referenced by gbworksheet.sty (*.png is gitignored, so they
+# must be generated at build time rather than committed).
+RUN python generate_aruco.py
+
 ENV WORKSHEETS_DB_PATH=/data/worksheets.sqlite3
 
 EXPOSE 8501
