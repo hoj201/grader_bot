@@ -28,6 +28,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
+from typing import Callable, Optional
 
 import anthropic
 
@@ -36,6 +37,16 @@ from worksheet_synth import _texinputs_env
 
 MODEL = "claude-sonnet-4-6"
 QUESTIONS_MARKER = "%%QUESTIONS%%"
+
+OnStep = Callable[[str, Optional[str]], None]
+
+
+def _print_step(msg: str, detail: Optional[str] = None) -> None:
+	"""Default callback for step progress: prints to stderr, optionally with detail."""
+	print(msg, file=sys.stderr)
+	if detail:
+		for line in detail.split("\n"):
+			print(f"  {line}", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------
@@ -78,7 +89,13 @@ Rules:
 """
 
 
-def generate_questions(client: anthropic.Anthropic, prompt: str, num_questions: int) -> list[Question]:
+def generate_questions(
+    client: anthropic.Anthropic,
+    prompt: str,
+    num_questions: int,
+    on_step: OnStep = _print_step,
+) -> list[Question]:
+    on_step(f"Generating {num_questions} questions...")
     user_msg = f"{prompt}\n\nGenerate exactly {num_questions} questions."
     resp = client.messages.create(
         model=MODEL,
@@ -87,13 +104,13 @@ def generate_questions(client: anthropic.Anthropic, prompt: str, num_questions: 
         messages=[{"role": "user", "content": user_msg}],
     )
     raw = "".join(block.text for block in resp.content if block.type == "text")
+    on_step("Received response from Claude", raw)
     data = _parse_json_array(raw)
 
     questions = [Question(id=str(q["id"]), text=q["text"], answer=q["answer"]) for q in data]
     if len(questions) != num_questions:
-        print(
-            f"warning: requested {num_questions} questions, got {len(questions)}",
-            file=sys.stderr,
+        on_step(
+            f"warning: requested {num_questions} questions, got {len(questions)}"
         )
     return questions
 
@@ -324,6 +341,7 @@ def generate_worksheet(
     max_repairs: int,
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
+    on_step: OnStep = _print_step,
 ) -> tuple[Path, list, "storage.WorksheetRecord"]:
     """Runs the full prompt -> questions -> LaTeX -> compile (with repair
     retries) -> optional S3/DB storage pipeline. Raises CompileError if
@@ -331,8 +349,7 @@ def generate_worksheet(
     (tex_path, questions, record), where `record` is None if `bucket` is
     not given.
     """
-    print(f"Generating {num_questions} questions...", file=sys.stderr)
-    questions = generate_questions(client, prompt, num_questions)
+    questions = generate_questions(client, prompt, num_questions, on_step=on_step)
 
     questions_tex = render_questions(questions)
     tex_source = fill_template(template_path, questions_tex)
@@ -344,13 +361,13 @@ def generate_worksheet(
     tex_path.write_text(tex_source)
 
     for attempt in range(max_repairs + 1):
-        print(f"Compiling (attempt {attempt + 1})...", file=sys.stderr)
+        on_step(f"Compiling (attempt {attempt + 1})...")
         success, log_tail = compile_tex(tex_path)
         if success:
-            print(f"Done: {tex_path.with_suffix('.pdf')}", file=sys.stderr)
+            on_step(f"Done: {tex_path.with_suffix('.pdf')}")
             record = None
             if bucket:
-                print(f"Uploading to s3://{bucket} and recording in {db_path}...", file=sys.stderr)
+                on_step(f"Uploading to s3://{bucket} and recording in {db_path}...")
                 record = storage.store_worksheet(
                     tex_path=tex_path,
                     questions=questions,
@@ -359,14 +376,15 @@ def generate_worksheet(
                     bucket=bucket,
                     db_path=db_path,
                 )
-                print(f"Stored worksheet id={record.id}", file=sys.stderr)
-                print(f"  student: {record.student_pdf_s3url}", file=sys.stderr)
-                print(f"  cv:      {record.cv_pdf_s3url}", file=sys.stderr)
-                print(f"  answers: {record.answers_pdf_s3url}", file=sys.stderr)
+                on_step(f"Stored worksheet id={record.id}")
+                on_step(
+                    "PDF URLs:",
+                    f"student: {record.student_pdf_s3url}\ncv:      {record.cv_pdf_s3url}\nanswers: {record.answers_pdf_s3url}",
+                )
             return tex_path, questions, record
         if attempt == max_repairs:
             raise CompileError(log_tail)
-        print("Compile failed, asking model to repair...", file=sys.stderr)
+        on_step("Compile failed, asking model to repair...", log_tail)
         tex_source = repair_tex(client, tex_source, log_tail)
         tex_path.write_text(tex_source)
 

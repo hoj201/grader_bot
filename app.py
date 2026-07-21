@@ -73,7 +73,13 @@ def render_create() -> None:
     out = Path("generated") / uuid4().hex[:8] / "worksheet"
     client = get_client()
 
-    with st.spinner("Generating questions, compiling LaTeX, and uploading..."):
+    with st.status("Generating worksheet...", expanded=True) as status:
+        def on_step(msg: str, detail: str | None = None) -> None:
+            status.update(label=msg)
+            st.write(msg)
+            if detail:
+                st.code(detail, language=None)
+
         try:
             _, _, record = generate_worksheet(
                 client,
@@ -84,10 +90,14 @@ def render_create() -> None:
                 max_repairs=3,
                 bucket=BUCKET,
                 db_path=DB_PATH,
+                on_step=on_step,
             )
         except CompileError as e:
+            status.update(label="Compilation failed", state="error")
             st.error(f"LaTeX compilation failed after repair attempts:\n\n{e.log_tail}")
             return
+
+        status.update(label="Done", state="complete")
 
     st.success(f"Created worksheet id={record.id}")
     st.rerun()
