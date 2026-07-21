@@ -48,20 +48,40 @@ def _draw_cross(image: np.ndarray, center: Tuple[int, int], size: int, color, th
     cv2.line(image, (cx - s, cy + s), (cx + s, cy - s), color, thickness)
 
 
+def _draw_score_header(image: np.ndarray, correct: int, total: int) -> None:
+    """Draws a printed 'Score: correct/total' at the top-center of the page,
+    scaled to the page width. Modifies `image` in place."""
+    height, width = image.shape[:2]
+    text = f"Score: {correct}/{total}"
+    scale = max(width / 1000.0, 0.6)
+    thickness = max(int(round(scale * 2)), 1)
+    (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+    x = max((width - text_w) // 2, 0)
+    y = text_h + max(int(round(scale * 8)), 4)
+    color = _CORRECT_COLOR if correct == total else _WRONG_COLOR
+    cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+
+
 def render_marked_page(
     image: np.ndarray,
     results: Dict[str, QuestionResult],
     boxes: Dict[str, Box],
     font: str = _DEFAULT_FONT,
     text_size: int = _DEFAULT_TEXT_SIZE,
+    draw_score: bool = True,
 ) -> np.ndarray:
     """Annotates a canonical-frame RGB `image` with per-question feedback and
     returns a new image (the input is left unmodified). For each question in
     `results` that has a box in `boxes`, draws a green check (correct) or red
     cross (incorrect) just right of the answer box; for wrong answers, writes
-    the correct answer beside the mark."""
+    the correct answer beside the mark. When `draw_score` is set, also stamps a
+    'Score: correct/total' header at the top of the page."""
     marked = np.ascontiguousarray(image).copy()
     height, width = marked.shape[:2]
+
+    if draw_score and results:
+        correct = sum(1 for result in results.values() if result.correct)
+        _draw_score_header(marked, correct, len(results))
 
     for qid, result in results.items():
         box = boxes.get(qid)

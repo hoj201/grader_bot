@@ -20,6 +20,8 @@ from graderbot import (
     grade_hw,
     is_correct,
     load_image_rgb,
+    load_pdf_pages_rgb,
+    load_scan_pages,
     read_box,
     rectify_to_canonical,
 )
@@ -130,6 +132,35 @@ def test_extract_answer_boxes_coordinates_are_relative(boxes):
 
 def test_extract_answer_boxes_sub001_is_below_add001(boxes):
     assert boxes["sub001"].y_lower_left < boxes["add001"].y_lower_left
+
+
+def test_load_pdf_pages_rgb_returns_every_page(tmp_path):
+    from PIL import Image
+
+    pages = [
+        Image.fromarray(np.full((40, 30, 3), fill, dtype=np.uint8))
+        for fill in (50, 150, 250)
+    ]
+    pdf_path = tmp_path / "multi.pdf"
+    pages[0].save(pdf_path, "PDF", save_all=True, append_images=pages[1:])
+
+    loaded = load_pdf_pages_rgb(str(pdf_path))
+
+    assert len(loaded) == 3
+    assert all(page.ndim == 3 and page.shape[2] == 3 for page in loaded)
+
+
+def test_load_scan_pages_reads_pdf_pages_and_single_raster(tmp_path):
+    from PIL import Image
+
+    two_pages = [Image.new("RGB", (30, 40), color) for color in ("black", "white")]
+    pdf_path = tmp_path / "scans.pdf"
+    two_pages[0].save(pdf_path, "PDF", save_all=True, append_images=two_pages[1:])
+    assert len(load_scan_pages(str(pdf_path))) == 2
+
+    png_path = tmp_path / "scan.png"
+    cv2.imwrite(str(png_path), np.full((40, 30, 3), 200, dtype=np.uint8))
+    assert len(load_scan_pages(str(png_path))) == 1
 
 
 def test_read_box_reads_handwritten_answers(boxes):

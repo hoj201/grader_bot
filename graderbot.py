@@ -284,6 +284,23 @@ def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, p
         ).copy()
 
 
+def load_pdf_pages_rgb(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI) -> List[np.ndarray]:
+    """Rasterizes every page of `pdf_filename` at `dpi`, returning a list of RGB
+    numpy arrays (one per page). Useful when a single uploaded PDF holds a whole
+    pile of scanned worksheets, one per page."""
+    with fitz.open(pdf_filename) as doc:
+        page_count = doc.page_count
+    return [render_pdf_page_image(pdf_filename, dpi, i) for i in range(page_count)]
+
+
+def load_scan_pages(path: str, dpi: int = _WORKSHEET_RENDER_DPI) -> List[np.ndarray]:
+    """Loads a scan source into a list of RGB page images: every page of a PDF,
+    or a single-element list for a raster image."""
+    if os.path.splitext(path)[1].lower() == ".pdf":
+        return load_pdf_pages_rgb(path, dpi)
+    return [load_image_rgb(path)]
+
+
 def _detect_marker_centers(image, source_name: str) -> Dict[int, Tuple[float, float]]:
     detector = cv2.aruco.ArucoDetector(_ARUCO_DICTIONARY, cv2.aruco.DetectorParameters())
     corners, ids, _ = detector.detectMarkers(image)

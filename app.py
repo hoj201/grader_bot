@@ -8,6 +8,8 @@ environment (see README.md).
 """
 
 import os
+import tempfile
+from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +18,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 import storage
+from scan_grader import mark_scan, results_by_student
 from worksheetbot import CompileError, generate_worksheet
 
 load_dotenv()
@@ -107,6 +110,64 @@ def render_create() -> None:
     st.rerun()
 
 
+def _display_results(result) -> dict:
+    """Builds the issue-#23 JSON: {student -> {worksheet id -> {question id ->
+    {answer, response, correct}}}}."""
+    return {
+        name: {
+            worksheet_id: {qid: asdict(res) for qid, res in question_results.items()}
+            for worksheet_id, question_results in worksheets.items()
+        }
+        for name, worksheets in results_by_student(result).items()
+    }
+
+
+def render_grade() -> None:
+    st.write(
+        "Upload a PDF of scanned student work. Each page is matched to its "
+        "worksheet by its QR code, graded against the stored answer key, and "
+        "returned as a marked-up PDF plus per-student results."
+    )
+    uploaded = st.file_uploader("Student work (PDF)", type=["pdf"])
+    roster_text = st.text_area(
+        "Roster (one student name per line, optional)",
+        placeholder="Alice Smith\nBob Jones",
+        help="Handwritten names are fuzzy-matched to this list.",
+    )
+    submitted = st.button("Grade", type="primary", disabled=uploaded is None)
+
+    if not submitted or uploaded is None:
+        return
+
+    roster = [line.strip() for line in roster_text.splitlines() if line.strip()]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        scan_path = Path(tmp) / "scan.pdf"
+        scan_path.write_bytes(uploaded.getvalue())
+        marked_path = Path(tmp) / "marked.pdf"
+
+        with st.spinner("Grading..."):
+            result = mark_scan([scan_path], roster, DB_PATH, marked_path)
+
+        graded = _display_results(result)
+        if not graded:
+            st.warning("No pages could be graded from this PDF.")
+        else:
+            st.success(f"Graded {len(graded)} student(s).")
+            st.json(graded)
+            st.download_button(
+                "Download marked-up PDF",
+                data=marked_path.read_bytes(),
+                file_name="marked.pdf",
+                mime="application/pdf",
+            )
+
+        if result.unreadable:
+            st.warning("Could not read a worksheet QR code on: " + ", ".join(result.unreadable))
+        for worksheet_id, scans in result.unknown_worksheets.items():
+            st.warning(f"Worksheet id '{worksheet_id}' is not in the database ({len(scans)} scan(s)).")
+
+
 def main() -> None:
     st.set_page_config(page_title="GraderBot", layout="wide")
     st.title("GraderBot")
@@ -115,11 +176,13 @@ def main() -> None:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
 
-    gallery_tab, create_tab = st.tabs(["Gallery", "Create"])
+    gallery_tab, create_tab, grade_tab = st.tabs(["Gallery", "Create", "Grade"])
     with gallery_tab:
         render_gallery()
     with create_tab:
         render_create()
+    with grade_tab:
+        render_grade()
 
 
 main()

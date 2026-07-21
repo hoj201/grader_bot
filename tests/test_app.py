@@ -112,6 +112,19 @@ def test_gallery_tab_shows_empty_state_with_no_worksheets(tmp_path, monkeypatch)
     assert any("No worksheets yet" in info.value for info in at.info)
 
 
+def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    # The Grade tab's uploader and roster field are present in the app tree.
+    assert any("Student work" in fu.label for fu in at.get("file_uploader"))
+
+
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)

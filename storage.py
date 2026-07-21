@@ -295,10 +295,18 @@ def generate_presigned_url(bucket: str, key: str, s3_client=None, expires_in: in
 # PDF generation
 # --------------------------------------------------------------------------
 
-def image_to_pdf(image: np.ndarray, out_path: Path) -> Path:
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    Image.fromarray(rgb_image).save(out_path, "PDF")
+def images_to_pdf(images: List[np.ndarray], out_path: Path) -> Path:
+    """Writes one or more BGR images as a single (multi-page) PDF, one page per
+    image, in order."""
+    if not images:
+        raise ValueError("images_to_pdf requires at least one image")
+    pages = [Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)) for img in images]
+    pages[0].save(out_path, "PDF", save_all=True, append_images=pages[1:])
     return out_path
+
+
+def image_to_pdf(image: np.ndarray, out_path: Path) -> Path:
+    return images_to_pdf([image], out_path)
 
 
 def generate_answer_key_pdf(tex_fn: str, answers: Dict[str, str], out_path: Path) -> Path:

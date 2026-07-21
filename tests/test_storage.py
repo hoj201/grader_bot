@@ -18,6 +18,7 @@ from storage import (
     generate_presigned_url,
     get_worksheet_by_public_id,
     image_to_pdf,
+    images_to_pdf,
     init_db,
     insert_worksheet,
     list_worksheets,
@@ -372,6 +373,21 @@ def test_image_to_pdf_writes_single_page_readable_pdf(tmp_path):
     assert out_path.exists()
     doc = pymupdf.open(out_path)
     assert doc.page_count == 1
+
+
+def test_images_to_pdf_writes_one_page_per_image(tmp_path):
+    images = [np.full((100, 200, 3), 255, dtype=np.uint8) for _ in range(3)]
+    out_path = tmp_path / "batch.pdf"
+
+    result = images_to_pdf(images, out_path)
+
+    assert result == out_path
+    assert pymupdf.open(out_path).page_count == 3
+
+
+def test_images_to_pdf_rejects_empty_list(tmp_path):
+    with pytest.raises(ValueError):
+        images_to_pdf([], tmp_path / "empty.pdf")
 
 
 # --------------------------------------------------------------------------

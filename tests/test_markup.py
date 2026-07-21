@@ -59,6 +59,30 @@ def test_render_marked_page_writes_correct_answer_only_for_wrong(page, monkeypat
     assert [c["answer"] for c in calls] == ["5"]
 
 
+def test_render_marked_page_stamps_score_header(page, monkeypatch):
+    image, results, boxes = page
+    calls = []
+
+    def fake_header(img, correct, total):
+        calls.append((correct, total))
+
+    monkeypatch.setattr(markup, "_draw_score_header", fake_header)
+
+    render_marked_page(image, results, boxes)
+
+    # One correct (q1), one wrong (q2) out of two questions.
+    assert calls == [(1, 2)]
+
+
+def test_render_marked_page_can_skip_score_header(page, monkeypatch):
+    image, results, boxes = page
+    monkeypatch.setattr(
+        markup, "_draw_score_header", lambda *a: pytest.fail("score header drawn")
+    )
+
+    render_marked_page(image, results, boxes, draw_score=False)
+
+
 def test_save_marked_pdf_writes_single_page(page, tmp_path):
     image, results, boxes = page
     out_path = tmp_path / "marked.pdf"
