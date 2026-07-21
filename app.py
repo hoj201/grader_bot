@@ -41,7 +41,9 @@ def render_gallery() -> None:
 
     for record in records:
         with st.container(border=True):
-            st.markdown(f"**{record.prompt}**")
+            st.markdown(f"**{record.title or record.prompt}**")
+            if record.title:
+                st.caption(record.prompt)
             sty_version = record.sty_hash[:8] if record.sty_hash else "unknown"
             st.caption(
                 f"id={record.id} · {record.num_questions} questions · "
@@ -64,6 +66,7 @@ def render_gallery() -> None:
 
 def render_create() -> None:
     prompt = st.text_area("Worksheet prompt", placeholder="10 question algebra worksheet on solving linear equations, grade 9")
+    title = st.text_input("Title (optional)", placeholder="Auto-generated from prompt if left blank")
     num_questions = st.number_input("Number of questions", min_value=1, max_value=50, value=10)
     submitted = st.button("Generate worksheet", type="primary", disabled=not prompt.strip())
 
@@ -90,6 +93,7 @@ def render_create() -> None:
                 max_repairs=3,
                 bucket=BUCKET,
                 db_path=DB_PATH,
+                title=title.strip() or None,
                 on_step=on_step,
             )
         except CompileError as e:

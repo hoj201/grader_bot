@@ -7,7 +7,7 @@ import storage
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
-def _seed_worksheet(db_path):
+def _seed_worksheet(db_path, title=None):
     conn = storage.init_db(db_path)
     storage.insert_worksheet(
         conn,
@@ -17,6 +17,7 @@ def _seed_worksheet(db_path):
             questions_json="[]",
             model="claude-sonnet-4-6",
             num_questions=10,
+            title=title,
             student_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/student.pdf",
             cv_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/cv.pdf",
             answers_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/answers.pdf",
@@ -57,6 +58,21 @@ def test_gallery_tab_renders_seeded_worksheet_without_error(tmp_path, monkeypatc
     assert "10 question algebra worksheet" in markdown_texts
     caption_texts = " ".join(c.value for c in at.caption)
     assert "sty=deadbeef" in caption_texts
+
+
+def test_gallery_tab_shows_title_with_prompt_below_it(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _seed_worksheet(db_path, title="Linear Equations Practice")
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    markdown_texts = " ".join(md.value for md in at.markdown)
+    assert "Linear Equations Practice" in markdown_texts
+    caption_texts = " ".join(c.value for c in at.caption)
+    assert "10 question algebra worksheet" in caption_texts
 
 
 def test_gallery_tab_shows_unknown_sty_version_when_hash_missing(tmp_path, monkeypatch):

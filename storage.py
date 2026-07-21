@@ -8,6 +8,7 @@ The SQLite file is expected to be replicated to S3 by litestream
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ class WorksheetRecord:
     questions_json: str
     model: str
     num_questions: int
+    title: Optional[str] = None
     student_pdf_s3url: Optional[str] = None
     cv_pdf_s3url: Optional[str] = None
     answers_pdf_s3url: Optional[str] = None
@@ -57,6 +59,7 @@ def init_db(db_path: Path) -> Connection:
             questions_json TEXT,
             model TEXT,
             num_questions INTEGER,
+            title TEXT,
             student_pdf_s3url TEXT,
             cv_pdf_s3url TEXT,
             answers_pdf_s3url TEXT,
@@ -79,6 +82,8 @@ def init_db(db_path: Path) -> Connection:
         conn.execute("ALTER TABLE WORKSHEET DROP COLUMN git_sha")
     if "sty_hash" not in columns:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN sty_hash TEXT")
+    if "title" not in columns:
+        conn.execute("ALTER TABLE WORKSHEET ADD COLUMN title TEXT")
     conn.commit()
     return conn
 
@@ -87,9 +92,9 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
     cursor = conn.execute(
         """
         INSERT INTO WORKSHEET
-            (prompt, tex_source, questions_json, model, num_questions,
+            (prompt, tex_source, questions_json, model, num_questions, title,
              student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
@@ -97,6 +102,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.questions_json,
             record.model,
             record.num_questions,
+            record.title,
             record.student_pdf_s3url,
             record.cv_pdf_s3url,
             record.answers_pdf_s3url,
@@ -111,7 +117,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
 def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
     rows = conn.execute(
         """
-        SELECT id, prompt, tex_source, questions_json, model, num_questions,
+        SELECT id, prompt, tex_source, questions_json, model, num_questions, title,
                student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url, sty_hash, created_at
         FROM WORKSHEET
         ORDER BY created_at DESC
@@ -125,11 +131,12 @@ def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
             questions_json=row[3],
             model=row[4],
             num_questions=row[5],
-            student_pdf_s3url=row[6],
-            cv_pdf_s3url=row[7],
-            answers_pdf_s3url=row[8],
-            sty_hash=row[9],
-            created_at=row[10],
+            title=row[6],
+            student_pdf_s3url=row[7],
+            cv_pdf_s3url=row[8],
+            answers_pdf_s3url=row[9],
+            sty_hash=row[10],
+            created_at=row[11],
         )
         for row in rows
     ]
@@ -161,6 +168,16 @@ def record_sty_version(conn: Connection, sty_path: Path = WORKSHEET_STY_PATH) ->
 # --------------------------------------------------------------------------
 # S3
 # --------------------------------------------------------------------------
+
+_SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def slugify_title(title: str) -> str:
+    """Converts a worksheet title into a filesystem/URL-safe slug for use
+    as a PDF filename prefix (e.g. "Linear Equations!" -> "Linear_Equations")."""
+    slug = _SLUG_RE.sub("_", title).strip("_")
+    return slug or "worksheet"
+
 
 def _default_s3_client():
     """boto3 only reads AWS_DEFAULT_REGION automatically, not AWS_REGION
@@ -219,10 +236,12 @@ def store_worksheet(
     model: str,
     bucket: str,
     db_path: Path,
+    title: Optional[str] = None,
     s3_client=None,
 ) -> WorksheetRecord:
     tex_path = Path(tex_path)
     stem = tex_path.stem
+    filename_prefix = slugify_title(title) if title else stem
 
     student_pdf = latexmk_worksheet(str(tex_path), cv_mode=False)
     cv_pdf = latexmk_worksheet(str(tex_path), cv_mode=True)
@@ -231,9 +250,15 @@ def store_worksheet(
     answers_pdf_path = tex_path.with_name(f"{stem}_answers.pdf")
     answers_pdf = generate_answer_key_pdf(str(tex_path), answers, answers_pdf_path)
 
-    student_url = upload_to_s3(Path(student_pdf), bucket, f"{stem}/student.pdf", s3_client=s3_client)
-    cv_url = upload_to_s3(Path(cv_pdf), bucket, f"{stem}/cv.pdf", s3_client=s3_client)
-    answers_url = upload_to_s3(Path(answers_pdf), bucket, f"{stem}/answers.pdf", s3_client=s3_client)
+    student_url = upload_to_s3(
+        Path(student_pdf), bucket, f"{stem}/{filename_prefix}_student.pdf", s3_client=s3_client
+    )
+    cv_url = upload_to_s3(
+        Path(cv_pdf), bucket, f"{stem}/{filename_prefix}_cv.pdf", s3_client=s3_client
+    )
+    answers_url = upload_to_s3(
+        Path(answers_pdf), bucket, f"{stem}/{filename_prefix}_answers.pdf", s3_client=s3_client
+    )
 
     conn = init_db(db_path)
     sty_hash = record_sty_version(conn)
@@ -244,6 +269,7 @@ def store_worksheet(
         questions_json=json.dumps([asdict(q) for q in questions]),
         model=model,
         num_questions=len(questions),
+        title=title,
         student_pdf_s3url=student_url,
         cv_pdf_s3url=cv_url,
         answers_pdf_s3url=answers_url,

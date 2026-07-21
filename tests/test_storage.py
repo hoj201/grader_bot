@@ -20,6 +20,7 @@ from storage import (
     list_worksheets,
     parse_s3_url,
     record_sty_version,
+    slugify_title,
     store_worksheet,
     upload_to_s3,
 )
@@ -60,6 +61,7 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "questions_json",
         "model",
         "num_questions",
+        "title",
         "student_pdf_s3url",
         "cv_pdf_s3url",
         "answers_pdf_s3url",
@@ -142,6 +144,35 @@ def test_init_db_adds_sty_hash_column_to_pre_existing_table(tmp_path):
     assert "sty_hash" in columns
 
 
+def test_init_db_adds_title_column_to_pre_existing_table(tmp_path):
+    db_path = tmp_path / "worksheets.sqlite3"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE WORKSHEET (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            tex_source TEXT,
+            questions_json TEXT,
+            model TEXT,
+            num_questions INTEGER,
+            student_pdf_s3url TEXT,
+            cv_pdf_s3url TEXT,
+            answers_pdf_s3url TEXT,
+            sty_hash TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = init_db(db_path)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    assert "title" in columns
+
+
 def test_init_db_creates_sty_version_table(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
 
@@ -175,6 +206,26 @@ def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
         record.sty_hash,
         record.created_at,
     )
+
+
+def test_insert_worksheet_persists_title(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record(title="Linear Equations Practice")
+
+    new_id = insert_worksheet(conn, record)
+
+    row = conn.execute("SELECT title FROM WORKSHEET WHERE id = ?", (new_id,)).fetchone()
+    assert row == ("Linear Equations Practice",)
+
+
+def test_insert_worksheet_allows_null_title(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record(title=None)
+
+    new_id = insert_worksheet(conn, record)
+
+    row = conn.execute("SELECT title FROM WORKSHEET WHERE id = ?", (new_id,)).fetchone()
+    assert row == (None,)
 
 
 def test_insert_worksheet_allows_null_pdf_urls(tmp_path):
@@ -247,6 +298,22 @@ def test_record_sty_version_adds_new_row_when_content_changes(tmp_path):
 
     count = conn.execute("SELECT COUNT(*) FROM STY_VERSION").fetchone()[0]
     assert count == 2
+
+
+# --------------------------------------------------------------------------
+# slugify_title
+# --------------------------------------------------------------------------
+
+def test_slugify_title_replaces_spaces_and_punctuation():
+    assert slugify_title("Linear Equations, Grade 9!") == "Linear_Equations_Grade_9"
+
+
+def test_slugify_title_strips_leading_and_trailing_separators():
+    assert slugify_title("  Fractions!!  ") == "Fractions"
+
+
+def test_slugify_title_falls_back_to_worksheet_for_empty_slug():
+    assert slugify_title("!!!") == "worksheet"
 
 
 # --------------------------------------------------------------------------
@@ -359,9 +426,9 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     assert record.num_questions == 1
     assert record.tex_source == tex_path.read_text()
     assert record.questions_json == '[{"id": "1", "text": "1+1=?", "answer": "2"}]'
-    assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/student.pdf"
-    assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/cv.pdf"
-    assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/answers.pdf"
+    assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_student.pdf"
+    assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_cv.pdf"
+    assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_answers.pdf"
     assert record.sty_hash == compute_sty_hash()
 
     conn = sqlite3.connect(db_path)
@@ -372,6 +439,44 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
         "SELECT content FROM STY_VERSION WHERE hash = ?", (record.sty_hash,)
     ).fetchone()
     assert sty_row == (WORKSHEET_STY_PATH.read_text(),)
+
+
+def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):
+    tex_path = tmp_path / "worksheet.tex"
+    tex_path.write_text(r"\documentclass{article}\begin{document}hi\end{document}")
+    db_path = tmp_path / "worksheets.sqlite3"
+    questions = [Question(id="1", text="1+1=?", answer="2")]
+
+    student_pdf = tmp_path / "build_blank" / "worksheet.pdf"
+    cv_pdf = tmp_path / "build_cv" / "worksheet.pdf"
+    answers_pdf = tmp_path / "answers.pdf"
+
+    def fake_latexmk(tex_filename, cv_mode):
+        return str(cv_pdf if cv_mode else student_pdf)
+
+    with patch("storage.latexmk_worksheet", side_effect=fake_latexmk), \
+         patch("storage.generate_answer_key_pdf", return_value=answers_pdf), \
+         patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
+        record = store_worksheet(
+            tex_path=tex_path,
+            questions=questions,
+            prompt="algebra worksheet",
+            model="claude-sonnet-4-6",
+            bucket="graderbot-test-bucket",
+            db_path=db_path,
+            title="Linear Equations!",
+        )
+
+    assert record.title == "Linear Equations!"
+    assert record.student_pdf_s3url == (
+        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_student.pdf"
+    )
+    assert record.cv_pdf_s3url == (
+        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_cv.pdf"
+    )
+    assert record.answers_pdf_s3url == (
+        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_answers.pdf"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -388,6 +493,15 @@ def test_list_worksheets_returns_rows_ordered_by_created_at_desc(tmp_path):
     assert [r.id for r in records] == [newer_id, older_id]
     assert [r.prompt for r in records] == ["newer", "older"]
     assert records[0].student_pdf_s3url == "https://bucket.s3.amazonaws.com/student.pdf"
+
+
+def test_list_worksheets_round_trips_title(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    insert_worksheet(conn, _sample_record(title="Fractions Warmup"))
+
+    records = list_worksheets(conn)
+
+    assert records[0].title == "Fractions Warmup"
 
 
 def test_list_worksheets_empty_db_returns_empty_list(tmp_path):

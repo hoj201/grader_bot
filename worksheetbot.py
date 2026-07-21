@@ -115,6 +115,29 @@ def generate_questions(
     return questions
 
 
+TITLE_SYSTEM_PROMPT = """Generate a short, descriptive title (5-8 words) for
+a math worksheet based on the given prompt. Return ONLY the title text -
+no quotes, no markdown, no trailing punctuation, no commentary."""
+
+
+def generate_title(
+    client: anthropic.Anthropic,
+    prompt: str,
+    on_step: OnStep = _print_step,
+) -> str:
+    on_step("Generating title...")
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=30,
+        system=TITLE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = "".join(block.text for block in resp.content if block.type == "text")
+    title = raw.strip().strip('"')
+    on_step(f"Title: {title}")
+    return title
+
+
 _VALID_JSON_ESCAPE_RE = re.compile(r'\\u[0-9a-fA-F]{4}|\\["\\/]')
 
 
@@ -341,6 +364,7 @@ def generate_worksheet(
     max_repairs: int,
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
+    title: Optional[str] = None,
     on_step: OnStep = _print_step,
 ) -> tuple[Path, list, "storage.WorksheetRecord"]:
     """Runs the full prompt -> questions -> LaTeX -> compile (with repair
@@ -367,6 +391,8 @@ def generate_worksheet(
             on_step(f"Done: {tex_path.with_suffix('.pdf')}")
             record = None
             if bucket:
+                if not title:
+                    title = generate_title(client, prompt, on_step=on_step)
                 on_step(f"Uploading to s3://{bucket} and recording in {db_path}...")
                 record = storage.store_worksheet(
                     tex_path=tex_path,
@@ -375,6 +401,7 @@ def generate_worksheet(
                     model=MODEL,
                     bucket=bucket,
                     db_path=db_path,
+                    title=title,
                 )
                 on_step(f"Stored worksheet id={record.id}")
                 on_step(
@@ -400,6 +427,12 @@ def main():
     parser.add_argument("--out", default="worksheet", help="Output basename (no extension)")
     parser.add_argument("--num-questions", type=int, default=10)
     parser.add_argument("--max-repairs", type=int, default=3)
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Worksheet title, used as a filename prefix and DB record. "
+        "Auto-generated from the prompt if not given (only when --bucket is set).",
+    )
     parser.add_argument("--save-json", action="store_true", help="Also save the raw question JSON")
     parser.add_argument(
         "--bucket",
@@ -427,6 +460,7 @@ def main():
             args.max_repairs,
             bucket=args.bucket,
             db_path=args.db_path,
+            title=args.title,
         )
     except CompileError as e:
         print("Failed after max repair attempts. Log tail:\n" + e.log_tail, file=sys.stderr)

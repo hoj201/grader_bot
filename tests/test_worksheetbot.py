@@ -13,6 +13,7 @@ from worksheetbot import (
     escape_latex,
     estimate_question_width,
     generate_questions,
+    generate_title,
     generate_worksheet,
     render_questions,
 )
@@ -84,6 +85,31 @@ def test_generate_questions_sends_prompt_and_count_to_model():
     user_message = kwargs["messages"][0]["content"]
     assert "fractions worksheet" in user_message
     assert "exactly 5 questions" in user_message
+
+
+def test_generate_title_returns_stripped_text():
+    client = _fake_client("  Linear Equations Practice  ")
+
+    title = generate_title(client, "algebra worksheet")
+
+    assert title == "Linear Equations Practice"
+
+
+def test_generate_title_strips_surrounding_quotes():
+    client = _fake_client('"Fractions Warmup"')
+
+    title = generate_title(client, "fractions worksheet")
+
+    assert title == "Fractions Warmup"
+
+
+def test_generate_title_sends_prompt_to_model():
+    client = _fake_client("Some Title")
+
+    generate_title(client, "division worksheet")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["messages"][0]["content"] == "division worksheet"
 
 
 def test_escape_latex_escapes_special_characters():
@@ -197,6 +223,14 @@ def _questions_client() -> MagicMock:
     return _fake_client(json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]))
 
 
+def _client_with_responses(*raw_texts: str) -> MagicMock:
+    client = MagicMock()
+    client.messages.create.side_effect = [
+        SimpleNamespace(content=[SimpleNamespace(type="text", text=text)]) for text in raw_texts
+    ]
+    return client
+
+
 def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_path):
     client = _questions_client()
     template_path = _template(tmp_path)
@@ -215,7 +249,9 @@ def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_
 
 
 def test_generate_worksheet_stores_when_bucket_given(tmp_path):
-    client = _questions_client()
+    client = _client_with_responses(
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title"
+    )
     template_path = _template(tmp_path)
     out = tmp_path / "worksheet"
     db_path = tmp_path / "worksheets.sqlite3"
@@ -247,8 +283,48 @@ def test_generate_worksheet_stores_when_bucket_given(tmp_path):
         model=MODEL,
         bucket="my-bucket",
         db_path=db_path,
+        title="Auto Title",
     )
     assert record is fake_record
+
+
+def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path):
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    db_path = tmp_path / "worksheets.sqlite3"
+    fake_record = SimpleNamespace(
+        id=1,
+        student_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/Given_Title_student.pdf",
+        cv_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/Given_Title_cv.pdf",
+        answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/Given_Title_answers.pdf",
+    )
+
+    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "worksheetbot.storage.store_worksheet", return_value=fake_record
+    ) as mock_store, patch("worksheetbot.generate_title") as mock_generate_title:
+        generate_worksheet(
+            client,
+            template_path,
+            "arithmetic",
+            out,
+            num_questions=1,
+            max_repairs=3,
+            bucket="my-bucket",
+            db_path=db_path,
+            title="Given Title",
+        )
+
+    mock_generate_title.assert_not_called()
+    mock_store.assert_called_once_with(
+        tex_path=Path(out).with_suffix(".tex"),
+        questions=[Question(id="1", text="1+1=?", answer="2")],
+        prompt="arithmetic",
+        model=MODEL,
+        bucket="my-bucket",
+        db_path=db_path,
+        title="Given Title",
+    )
 
 
 def test_generate_worksheet_repairs_and_succeeds_on_retry(tmp_path):
