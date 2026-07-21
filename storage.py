@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from graderbot import Box, extract_answer_boxes
 from worksheet_synth import WORKSHEET_STY_PATH, fill_worksheet, latexmk_worksheet
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class WorksheetRecord:
     num_questions: int
     title: Optional[str] = None
     public_id: Optional[str] = None
+    boxes_json: Optional[str] = None
     student_pdf_s3url: Optional[str] = None
     cv_pdf_s3url: Optional[str] = None
     answers_pdf_s3url: Optional[str] = None
@@ -62,6 +64,7 @@ def init_db(db_path: Path) -> Connection:
             num_questions INTEGER,
             title TEXT,
             public_id TEXT,
+            boxes_json TEXT,
             student_pdf_s3url TEXT,
             cv_pdf_s3url TEXT,
             answers_pdf_s3url TEXT,
@@ -88,6 +91,8 @@ def init_db(db_path: Path) -> Connection:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN title TEXT")
     if "public_id" not in columns:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN public_id TEXT")
+    if "boxes_json" not in columns:
+        conn.execute("ALTER TABLE WORKSHEET ADD COLUMN boxes_json TEXT")
     conn.commit()
     return conn
 
@@ -97,9 +102,9 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
         """
         INSERT INTO WORKSHEET
             (prompt, tex_source, questions_json, model, num_questions, title,
-             public_id, student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url,
-             sty_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             public_id, boxes_json, student_pdf_s3url, cv_pdf_s3url,
+             answers_pdf_s3url, sty_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
@@ -109,6 +114,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.num_questions,
             record.title,
             record.public_id,
+            record.boxes_json,
             record.student_pdf_s3url,
             record.cv_pdf_s3url,
             record.answers_pdf_s3url,
@@ -120,34 +126,63 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
     return cursor.lastrowid
 
 
+# Column order shared by every WorksheetRecord SELECT, kept in sync with
+# `_row_to_record` below.
+_RECORD_COLUMNS = (
+    "id", "prompt", "tex_source", "questions_json", "model", "num_questions",
+    "title", "public_id", "boxes_json", "student_pdf_s3url", "cv_pdf_s3url",
+    "answers_pdf_s3url", "sty_hash", "created_at",
+)
+
+
+def _row_to_record(row) -> WorksheetRecord:
+    return WorksheetRecord(
+        id=row[0],
+        prompt=row[1],
+        tex_source=row[2],
+        questions_json=row[3],
+        model=row[4],
+        num_questions=row[5],
+        title=row[6],
+        public_id=row[7],
+        boxes_json=row[8],
+        student_pdf_s3url=row[9],
+        cv_pdf_s3url=row[10],
+        answers_pdf_s3url=row[11],
+        sty_hash=row[12],
+        created_at=row[13],
+    )
+
+
 def list_worksheets(conn: Connection) -> List[WorksheetRecord]:
     rows = conn.execute(
-        """
-        SELECT id, prompt, tex_source, questions_json, model, num_questions, title,
-               public_id, student_pdf_s3url, cv_pdf_s3url, answers_pdf_s3url,
-               sty_hash, created_at
-        FROM WORKSHEET
-        ORDER BY created_at DESC
-        """
+        f"SELECT {', '.join(_RECORD_COLUMNS)} FROM WORKSHEET ORDER BY created_at DESC"
     ).fetchall()
-    return [
-        WorksheetRecord(
-            id=row[0],
-            prompt=row[1],
-            tex_source=row[2],
-            questions_json=row[3],
-            model=row[4],
-            num_questions=row[5],
-            title=row[6],
-            public_id=row[7],
-            student_pdf_s3url=row[8],
-            cv_pdf_s3url=row[9],
-            answers_pdf_s3url=row[10],
-            sty_hash=row[11],
-            created_at=row[12],
-        )
-        for row in rows
-    ]
+    return [_row_to_record(row) for row in rows]
+
+
+def get_worksheet_by_public_id(conn: Connection, public_id: str) -> Optional[WorksheetRecord]:
+    """Looks up a single worksheet by its embedded public id (the value
+    encoded in the on-page QR code). Returns None if no row matches."""
+    row = conn.execute(
+        f"SELECT {', '.join(_RECORD_COLUMNS)} FROM WORKSHEET WHERE public_id = ?",
+        (public_id,),
+    ).fetchone()
+    return _row_to_record(row) if row is not None else None
+
+
+def serialize_boxes(boxes: Dict[str, Box]) -> str:
+    """Serializes a {box id: Box} mapping (as produced by
+    `graderbot.extract_answer_boxes`) to JSON for the WORKSHEET.boxes_json
+    column, so the grader can recover answer-box locations from a scan
+    without re-rendering the worksheet."""
+    return json.dumps({box_id: asdict(box) for box_id, box in boxes.items()})
+
+
+def deserialize_boxes(boxes_json: str) -> Dict[str, Box]:
+    """Inverse of `serialize_boxes`: rebuilds the {box id: Box} mapping from
+    stored JSON."""
+    return {box_id: Box(**fields) for box_id, fields in json.loads(boxes_json).items()}
 
 
 # --------------------------------------------------------------------------
@@ -255,6 +290,10 @@ def store_worksheet(
     student_pdf = latexmk_worksheet(str(tex_path), cv_mode=False)
     cv_pdf = latexmk_worksheet(str(tex_path), cv_mode=True)
 
+    # Persist answer-box locations so the grader can map a scan's boxes from
+    # the DB alone, without re-rendering the cv worksheet at grade time.
+    boxes_json = serialize_boxes(extract_answer_boxes(cv_pdf))
+
     answers = {q.id: q.answer for q in questions}
     answers_pdf_path = tex_path.with_name(f"{stem}_answers.pdf")
     answers_pdf = generate_answer_key_pdf(str(tex_path), answers, answers_pdf_path)
@@ -280,6 +319,7 @@ def store_worksheet(
         num_questions=len(questions),
         title=title,
         public_id=public_id,
+        boxes_json=boxes_json,
         student_pdf_s3url=student_url,
         cv_pdf_s3url=cv_url,
         answers_pdf_s3url=answers_url,

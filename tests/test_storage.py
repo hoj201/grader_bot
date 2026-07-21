@@ -8,18 +8,22 @@ import pymupdf
 import pytest
 from moto import mock_aws
 
+from graderbot import Box
 from storage import (
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
+    deserialize_boxes,
     generate_answer_key_pdf,
     generate_presigned_url,
+    get_worksheet_by_public_id,
     image_to_pdf,
     init_db,
     insert_worksheet,
     list_worksheets,
     parse_s3_url,
     record_sty_version,
+    serialize_boxes,
     slugify_title,
     store_worksheet,
     upload_to_s3,
@@ -63,6 +67,7 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "num_questions",
         "title",
         "public_id",
+        "boxes_json",
         "student_pdf_s3url",
         "cv_pdf_s3url",
         "answers_pdf_s3url",
@@ -403,8 +408,11 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     def fake_latexmk(tex_filename, cv_mode):
         return str(cv_pdf if cv_mode else student_pdf)
 
+    sample_boxes = {"1": Box(0.1, 0.2, 0.3, 0.1), "name": Box(0.1, 0.9, 0.4, 0.05)}
+
     with patch("storage.latexmk_worksheet", side_effect=fake_latexmk) as mock_latexmk, \
          patch("storage.generate_answer_key_pdf", return_value=answers_pdf) as mock_answer_key, \
+         patch("storage.extract_answer_boxes", return_value=sample_boxes) as mock_boxes, \
          patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}") as mock_upload:
         record = store_worksheet(
             tex_path=tex_path,
@@ -415,6 +423,8 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
             db_path=db_path,
         )
 
+    mock_boxes.assert_called_once_with(str(cv_pdf))
+    assert deserialize_boxes(record.boxes_json) == sample_boxes
     assert mock_latexmk.call_count == 2
     mock_latexmk.assert_any_call(str(tex_path), cv_mode=False)
     mock_latexmk.assert_any_call(str(tex_path), cv_mode=True)
@@ -457,6 +467,7 @@ def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):
 
     with patch("storage.latexmk_worksheet", side_effect=fake_latexmk), \
          patch("storage.generate_answer_key_pdf", return_value=answers_pdf), \
+         patch("storage.extract_answer_boxes", return_value={"1": Box(0.1, 0.2, 0.3, 0.1)}), \
          patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
         record = store_worksheet(
             tex_path=tex_path,
@@ -509,6 +520,81 @@ def test_list_worksheets_empty_db_returns_empty_list(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
 
     assert list_worksheets(conn) == []
+
+
+# --------------------------------------------------------------------------
+# boxes_json: serialize/deserialize + persistence
+# --------------------------------------------------------------------------
+
+def test_serialize_boxes_round_trips():
+    boxes = {
+        "add001": Box(0.1, 0.2, 0.3, 0.05),
+        "name": Box(0.1, 0.9, 0.4, 0.05),
+    }
+
+    assert deserialize_boxes(serialize_boxes(boxes)) == boxes
+
+
+def test_insert_worksheet_round_trips_boxes_json(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    boxes_json = serialize_boxes({"1": Box(0.1, 0.2, 0.3, 0.05)})
+    insert_worksheet(conn, _sample_record(boxes_json=boxes_json))
+
+    records = list_worksheets(conn)
+
+    assert records[0].boxes_json == boxes_json
+
+
+def test_init_db_adds_boxes_json_column_to_pre_existing_table(tmp_path):
+    db_path = tmp_path / "worksheets.sqlite3"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE WORKSHEET (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            tex_source TEXT,
+            questions_json TEXT,
+            model TEXT,
+            num_questions INTEGER,
+            student_pdf_s3url TEXT,
+            cv_pdf_s3url TEXT,
+            answers_pdf_s3url TEXT,
+            sty_hash TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = init_db(db_path)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    assert "boxes_json" in columns
+
+
+# --------------------------------------------------------------------------
+# get_worksheet_by_public_id
+# --------------------------------------------------------------------------
+
+def test_get_worksheet_by_public_id_returns_matching_record(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    insert_worksheet(conn, _sample_record(public_id="ws_aaaa1111", prompt="target"))
+    insert_worksheet(conn, _sample_record(public_id="ws_bbbb2222", prompt="other"))
+
+    record = get_worksheet_by_public_id(conn, "ws_aaaa1111")
+
+    assert record is not None
+    assert record.public_id == "ws_aaaa1111"
+    assert record.prompt == "target"
+
+
+def test_get_worksheet_by_public_id_returns_none_when_missing(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    insert_worksheet(conn, _sample_record(public_id="ws_aaaa1111"))
+
+    assert get_worksheet_by_public_id(conn, "ws_nope0000") is None
 
 
 # --------------------------------------------------------------------------
