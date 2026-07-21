@@ -4,7 +4,10 @@ Worksheet generator agent.
 
 Pipeline:
   prompt -> LLM generates structured question JSON
-         -> render each question via \\Question{id}{text}, LaTeX-escaping the id
+         -> render each question via \\Question{id}{text}, LaTeX-escaping the id;
+            laid out as a multi-column tabular grid when there are enough
+            questions of similar estimated width, else a single vertical
+            column (see choose_grid_columns)
          -> insert into template at %%QUESTIONS%% marker
          -> compile with latexmk
          -> on LaTeX compile error, feed log back to LLM to repair, retry
@@ -125,12 +128,82 @@ def escape_latex(text: str) -> str:
     return "".join(out)
 
 
+_FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+_CTRL_WORD_RE = re.compile(r"\\[a-zA-Z]+")
+
+# Layout tuning constants (rough estimates, see issue #13 for context).
+_ANSWER_BOX_WIDTH_IN = 1.5
+_PAGE_TEXT_WIDTH_IN = 6.5
+_CHAR_WIDTH_IN = 0.09
+_CELL_SPACING_IN = 0.3
+_MAX_WIDTH_VARIANCE_RATIO = 1.6
+_MIN_QUESTIONS_FOR_GRID = 6
+
+
+def estimate_question_width(text: str) -> int:
+    """Rough character-count estimate of a question's rendered width.
+    Strips LaTeX math delimiters and control words (since they don't
+    render as visible characters), collapsing \\frac{a}{b} to the width
+    of its widest part. Good enough to bucket questions as "short and
+    uniform" vs. "too long/variable" for grid layout; not a substitute
+    for actually measuring glyphs."""
+    s = text.strip().replace("$", "")
+    s = _FRAC_RE.sub(lambda m: "X" * max(len(m.group(1)), len(m.group(2))), s)
+    s = _CTRL_WORD_RE.sub("", s)
+    s = s.replace("{", "").replace("}", "")
+    return len(s)
+
+
+def choose_grid_columns(questions: list[Question]) -> int:
+    """Returns how many columns a tabular grid of `questions` should
+    use. Falls back to 1 (single vertical column) when there aren't
+    enough questions to bother with a grid, or when question widths
+    are too uneven for uniform-width columns to look reasonable."""
+    if len(questions) < _MIN_QUESTIONS_FOR_GRID:
+        return 1
+
+    widths = [estimate_question_width(q.text) for q in questions]
+    if max(widths) / max(min(widths), 1) > _MAX_WIDTH_VARIANCE_RATIO:
+        return 1
+
+    col_width_in = _ANSWER_BOX_WIDTH_IN + max(widths) * _CHAR_WIDTH_IN + _CELL_SPACING_IN
+    return max(1, int(_PAGE_TEXT_WIDTH_IN // col_width_in))
+
+
 def render_questions(questions: list[Question]) -> str:
-    lines = []
-    for q in questions:
-        qid = escape_latex(q.id)
-        lines.append(f"\\Question{{{qid}}}{{{q.text}}}")
-    return "\n".join(lines)
+    cols = choose_grid_columns(questions)
+    if cols <= 1:
+        return _render_questions_vertical(questions)
+    return _render_questions_grid(questions, cols)
+
+
+def _render_questions_vertical(questions: list[Question]) -> str:
+    # A bare "\n"-joined list of \Question{}{} calls is a single LaTeX
+    # paragraph (blank lines, not single newlines, separate paragraphs),
+    # so questions ran together instead of stacking one per line. An
+    # enumerate environment forces each onto its own line.
+    items = "\n".join(
+        f"    \\item \\Question{{{escape_latex(q.id)}}}{{{q.text}}}" for q in questions
+    )
+    return f"\\begin{{enumerate}}\n{items}\n\\end{{enumerate}}"
+
+
+def _render_questions_grid(questions: list[Question], cols: int) -> str:
+    col_width_in = _PAGE_TEXT_WIDTH_IN / cols
+    col_spec = f"p{{{col_width_in:.3f}in}}" * cols
+
+    rows = []
+    for i in range(0, len(questions), cols):
+        row_questions = questions[i : i + cols]
+        cells = [f"\\Question{{{escape_latex(q.id)}}}{{{q.text}}}" for q in row_questions]
+        cells += [""] * (cols - len(cells))
+        rows.append(" & ".join(cells) + r" \\[0.6em]")
+
+    return (
+        f"\\begin{{tabular}}{{@{{}}{col_spec}@{{}}}}\n"
+        + "\n".join(rows)
+        + "\n\\end{tabular}"
+    )
 
 
 def fill_template(template_path: Path, questions_tex: str) -> str:
