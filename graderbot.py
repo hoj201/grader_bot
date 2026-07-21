@@ -34,17 +34,6 @@ class Score:
 _RED = (1, 0, 0)
 _RED_TOLERANCE = 0.15
 
-def grade_hw_stack(worksheet_fn: LiteralString, answer_key_fn: LiteralString, hws: List[LiteralString], roster: List[LiteralString]) -> Dict[LiteralString, Score]:
-    boxes = extract_answer_boxes(worksheet_fn)
-    answer_key_image = align_document_image(answer_key_fn, worksheet_fn)
-    answer_key = {qid: read_box(answer_key_image, box) for qid, box in boxes.items()}
-    scores = dict()
-    for hw in hws:
-        hw_image = load_image_rgb(hw)
-        name = extract_name(hw_image, boxes["name"], roster)
-        scores[name] = grade_hw(answer_key, boxes, hw_image)
-    return scores
-
 
 _NAME_OCR_UPSCALE = 6
 _NAME_MATCH_CUTOFF = 0.4
