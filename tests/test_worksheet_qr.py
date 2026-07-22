@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 import pytest
 
-from graderbot.core import read_worksheet_id, render_pdf_page_image
+from graderbot.imaging import render_pdf_page_image
+from graderbot.registration import read_worksheet_id
 from graderbot.worksheet_qr import (
     decode_worksheet_id,
     generate_worksheet_id,

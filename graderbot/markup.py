@@ -17,7 +17,8 @@ from typing import Dict, Tuple, Union
 import cv2
 import numpy as np
 
-from graderbot.core import Box, QuestionResult, box_pixel_rect
+from graderbot.imaging import box_pixel_rect
+from graderbot.models import Box, QuestionResult
 from graderbot.storage import image_to_pdf
 from graderbot.worksheet_synth import _DEFAULT_FONT, _DEFAULT_TEXT_SIZE, _draw_answer
 

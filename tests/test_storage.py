@@ -8,7 +8,7 @@ import pymupdf
 import pytest
 from moto import mock_aws
 
-from graderbot.core import Box
+from graderbot.models import Box
 from graderbot.storage import (
     WorksheetRecord,
     _default_s3_client,

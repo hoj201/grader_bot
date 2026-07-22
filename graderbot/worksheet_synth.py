@@ -225,7 +225,8 @@ def fill_worksheet(
     the worksheet's name box (id "name", drawn by \\WorksheetHeader).
     Returns the composited worksheet as a BGR numpy array.
     """
-    from graderbot.core import extract_answer_boxes, render_pdf_page_image
+    from graderbot.imaging import render_pdf_page_image
+    from graderbot.worksheet_boxes import extract_answer_boxes
 
     cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
     blank_worksheet = latexmk_worksheet(tex_fn, cv_mode=False)

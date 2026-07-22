@@ -21,7 +21,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from graderbot.core import Box, extract_answer_boxes
+from graderbot.models import Box
+from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import WORKSHEET_STY_PATH, fill_worksheet, latexmk_worksheet
 
 if TYPE_CHECKING:

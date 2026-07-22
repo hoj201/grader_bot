@@ -23,15 +23,11 @@ from typing import Dict, List, Tuple, Union
 import cv2
 import numpy as np
 
-from graderbot.core import (
-    Box,
-    QuestionResult,
-    extract_name,
-    grade_hw,
-    load_scan_pages,
-    read_worksheet_id,
-    rectify_to_canonical,
-)
+from graderbot.grading import grade_hw
+from graderbot.imaging import load_scan_pages
+from graderbot.models import Box, QuestionResult
+from graderbot.ocr import extract_name
+from graderbot.registration import read_worksheet_id, rectify_to_canonical
 from graderbot.markup import render_marked_page
 from graderbot.storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
 

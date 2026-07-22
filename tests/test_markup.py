@@ -3,7 +3,7 @@ import pymupdf
 import pytest
 
 from graderbot import markup
-from graderbot.core import Box, QuestionResult
+from graderbot.models import Box, QuestionResult
 from graderbot.markup import _CORRECT_COLOR, _WRONG_COLOR, render_marked_page, save_marked_pdf
 
 

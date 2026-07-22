@@ -8,22 +8,21 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot.core import (
-    Box,
-    QuestionResult,
+from graderbot.grading import grade_hw, is_correct
+from graderbot.imaging import (
+    box_pixel_rect,
+    load_pdf_pages_rgb,
+    load_scan_pages,
+)
+from graderbot.models import Box, QuestionResult
+from graderbot.ocr import extract_name, read_box
+from graderbot.registration import (
     _canonical_marker_centers,
     _detect_marker_centers,
     align_document_image,
-    box_pixel_rect,
-    extract_answer_boxes,
-    extract_name,
-    grade_hw,
-    is_correct,
-    load_pdf_pages_rgb,
-    load_scan_pages,
-    read_box,
     rectify_to_canonical,
 )
+from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "tex" / "demo.tex"
@@ -229,7 +228,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
         qid = next(qid for qid, b in boxes.items() if b is box)
         return responses[qid]
 
-    monkeypatch.setattr("graderbot.core.read_box", fake_read_box)
+    monkeypatch.setattr("graderbot.grading.read_box", fake_read_box)
 
     results = grade_hw(answer_key, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
@@ -241,7 +240,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
 
 def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05)}
-    monkeypatch.setattr("graderbot.core.read_box", lambda image, box: "")
+    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "")
 
     results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 

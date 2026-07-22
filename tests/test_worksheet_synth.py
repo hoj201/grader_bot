@@ -4,7 +4,7 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot.core import extract_answer_boxes
+from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import (
     add_image_noise,
     fill_worksheet,
