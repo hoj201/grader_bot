@@ -23,7 +23,7 @@ For fetching github issues do
 gh issue view 13 --json number,title,body,comments,labels,state -R hoj201/grader_bot
 ```
 
-if an issue has the label `no claude` then you should not work on it.
+if an issue has the label `no claude` or `wontfix` then you should not work on it.
 
 
 
