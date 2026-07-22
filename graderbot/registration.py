@@ -12,12 +12,15 @@ _MARKER_ID_TL, _MARKER_ID_TR, _MARKER_ID_BL, _MARKER_ID_BR = 0, 1, 2, 3
 _REGISTRATION_MARKER_IDS = (_MARKER_ID_TL, _MARKER_ID_TR, _MARKER_ID_BL, _MARKER_ID_BR)
 
 # Canonical worksheet page geometry, mirroring gbworksheet.sty (letter paper,
-# marker inset 0.15in, marker size 0.75in). Each corner marker's center sits
+# marker inset 0.40in, marker size 0.50in). Each corner marker's center sits
 # inset + size/2 in from its page corner. Used to rectify a scan to a canonical
-# page without a reference PDF (see rectify_to_canonical).
+# page without a reference PDF (see rectify_to_canonical). These MUST stay in
+# sync with \worksheet@markerinset / \worksheet@markersize in gbworksheet.sty;
+# the inset clears a printer's non-printable margin so the marker border isn't
+# clipped on the printout (issue #35).
 _PAGE_WIDTH_IN, _PAGE_HEIGHT_IN = 8.5, 11.0
-_MARKER_INSET_IN = 0.15
-_MARKER_SIZE_IN = 0.75
+_MARKER_INSET_IN = 0.40
+_MARKER_SIZE_IN = 0.50
 
 
 def read_worksheet_id(image: np.ndarray) -> Optional[str]:

@@ -26,8 +26,15 @@
 
 \makeatletter
 
-\def\worksheet@markersize{0.75in}
-\def\worksheet@markerinset{0.15in}
+% Registration marker geometry. The inset is the distance from the paper edge
+% to the marker's OUTER edge; it must clear a consumer printer's non-printable
+% margin (~0.17-0.25in) plus fit-to-page shrink, or the printout clips the
+% marker's black border and cv2.aruco can no longer decode it (issue #35). The
+% marker is deliberately small -- worksheet identity rides on the QR code, so
+% the fiducials only need to be large enough to localize. MUST stay in sync with
+% _MARKER_SIZE_IN / _MARKER_INSET_IN in graderbot/registration.py.
+\def\worksheet@markersize{0.50in}
+\def\worksheet@markerinset{0.40in}
 \def\worksheet@markerdirectory{aruco_images}
 \def\worksheet@frameinset{0.85in}
 
