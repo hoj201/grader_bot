@@ -15,6 +15,7 @@ from pathlib import Path
 from sqlite3 import Connection, connect
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import boto3
 import cv2
@@ -339,6 +340,12 @@ def store_worksheet(
     stem = tex_path.stem
     filename_prefix = slugify_title(title) if title else stem
 
+    # Namespace S3 keys by the unique public_id so two worksheets that share a
+    # title (or the default tex stem) can't collide and overwrite each other's
+    # PDFs (issue #33). Fall back to a fresh random id if ever called without a
+    # public_id. The title slug stays in the filename for readable downloads.
+    key_prefix = public_id or uuid4().hex[:8]
+
     student_pdf = latexmk_worksheet(str(tex_path), cv_mode=False)
     cv_pdf = latexmk_worksheet(str(tex_path), cv_mode=True)
 
@@ -351,13 +358,13 @@ def store_worksheet(
     answers_pdf = generate_answer_key_pdf(str(tex_path), answers, answers_pdf_path)
 
     student_url = upload_to_s3(
-        Path(student_pdf), bucket, f"{stem}/{filename_prefix}_student.pdf", s3_client=s3_client
+        Path(student_pdf), bucket, f"{key_prefix}/{filename_prefix}_student.pdf", s3_client=s3_client
     )
     cv_url = upload_to_s3(
-        Path(cv_pdf), bucket, f"{stem}/{filename_prefix}_cv.pdf", s3_client=s3_client
+        Path(cv_pdf), bucket, f"{key_prefix}/{filename_prefix}_cv.pdf", s3_client=s3_client
     )
     answers_url = upload_to_s3(
-        Path(answers_pdf), bucket, f"{stem}/{filename_prefix}_answers.pdf", s3_client=s3_client
+        Path(answers_pdf), bucket, f"{key_prefix}/{filename_prefix}_answers.pdf", s3_client=s3_client
     )
 
     conn = init_db(db_path)

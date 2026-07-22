@@ -456,6 +456,7 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
             model="claude-sonnet-4-6",
             bucket="graderbot-test-bucket",
             db_path=db_path,
+            public_id="ws_abcd1234",
         )
 
     mock_boxes.assert_called_once_with(str(cv_pdf))
@@ -472,9 +473,9 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     assert record.num_questions == 1
     assert record.tex_source == tex_path.read_text()
     assert record.questions_json == '[{"id": "1", "text": "1+1=?", "answer": "2"}]'
-    assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_student.pdf"
-    assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_cv.pdf"
-    assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/worksheet_answers.pdf"
+    assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_student.pdf"
+    assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_cv.pdf"
+    assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_answers.pdf"
     assert record.sty_hash == compute_sty_hash()
 
     conn = sqlite3.connect(db_path)
@@ -512,18 +513,59 @@ def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):
             bucket="graderbot-test-bucket",
             db_path=db_path,
             title="Linear Equations!",
+            public_id="ws_abcd1234",
         )
 
     assert record.title == "Linear Equations!"
     assert record.student_pdf_s3url == (
-        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_student.pdf"
+        "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/Linear_Equations_student.pdf"
     )
     assert record.cv_pdf_s3url == (
-        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_cv.pdf"
+        "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/Linear_Equations_cv.pdf"
     )
     assert record.answers_pdf_s3url == (
-        "https://graderbot-test-bucket.s3.amazonaws.com/worksheet/Linear_Equations_answers.pdf"
+        "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/Linear_Equations_answers.pdf"
     )
+
+
+def test_store_worksheet_same_title_distinct_public_ids_no_key_collision(tmp_path):
+    """Two worksheets sharing a title must get distinct S3 keys (issue #33):
+    the unique public_id namespaces the key so the second upload can't
+    overwrite the first's PDFs."""
+    tex_path = tmp_path / "worksheet.tex"
+    tex_path.write_text(r"\documentclass{article}\begin{document}hi\end{document}")
+    db_path = tmp_path / "worksheets.sqlite3"
+    questions = [Question(id="1", text="1+1=?", answer="2")]
+
+    student_pdf = tmp_path / "build_blank" / "worksheet.pdf"
+    cv_pdf = tmp_path / "build_cv" / "worksheet.pdf"
+    answers_pdf = tmp_path / "answers.pdf"
+
+    def fake_latexmk(tex_filename, cv_mode):
+        return str(cv_pdf if cv_mode else student_pdf)
+
+    def store(public_id):
+        with patch("graderbot.storage.latexmk_worksheet", side_effect=fake_latexmk), \
+             patch("graderbot.storage.generate_answer_key_pdf", return_value=answers_pdf), \
+             patch("graderbot.storage.extract_answer_boxes", return_value={"1": Box(0.1, 0.2, 0.3, 0.1)}), \
+             patch("graderbot.storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
+            return store_worksheet(
+                tex_path=tex_path,
+                questions=questions,
+                prompt="algebra worksheet",
+                model="claude-sonnet-4-6",
+                bucket="graderbot-test-bucket",
+                db_path=db_path,
+                title="Fractions",
+                public_id=public_id,
+            )
+
+    first = store("ws_11111111")
+    second = store("ws_22222222")
+
+    assert first.student_pdf_s3url != second.student_pdf_s3url
+    assert first.cv_pdf_s3url != second.cv_pdf_s3url
+    assert first.answers_pdf_s3url != second.answers_pdf_s3url
 
 
 # --------------------------------------------------------------------------
