@@ -36,7 +36,11 @@ import storage
 from worksheet_qr import generate_worksheet_id, render_qr_png
 from worksheet_synth import _texinputs_env
 
-MODEL = "claude-sonnet-4-6"
+# Models the worksheet-generation pipeline can run against. The first entry is
+# the default (issue #22). Threaded through every client.messages.create call
+# so the model is a runtime choice rather than a hardcoded constant.
+AVAILABLE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"]
+MODEL = AVAILABLE_MODELS[0]
 QUESTIONS_MARKER = "%%QUESTIONS%%"
 WORKSHEET_ID_MARKER = "%%WORKSHEET_ID%%"
 
@@ -95,12 +99,13 @@ def generate_questions(
     client: anthropic.Anthropic,
     prompt: str,
     num_questions: int,
+    model: str = MODEL,
     on_step: OnStep = _print_step,
 ) -> list[Question]:
     on_step(f"Generating {num_questions} questions...")
     user_msg = f"{prompt}\n\nGenerate exactly {num_questions} questions."
     resp = client.messages.create(
-        model=MODEL,
+        model=model,
         max_tokens=4000,
         system=GENERATION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
@@ -125,11 +130,12 @@ no quotes, no markdown, no trailing punctuation, no commentary."""
 def generate_title(
     client: anthropic.Anthropic,
     prompt: str,
+    model: str = MODEL,
     on_step: OnStep = _print_step,
 ) -> str:
     on_step("Generating title...")
     resp = client.messages.create(
-        model=MODEL,
+        model=model,
         max_tokens=30,
         system=TITLE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
@@ -342,13 +348,15 @@ do not alter unrelated content, especially the \\Question{...}{...}
 lines' meaning."""
 
 
-def repair_tex(client: anthropic.Anthropic, tex_source: str, log_tail: str) -> str:
+def repair_tex(
+    client: anthropic.Anthropic, tex_source: str, log_tail: str, model: str = MODEL
+) -> str:
     user_msg = (
         f"Compile log (tail):\n```\n{log_tail}\n```\n\n"
         f"Current .tex source:\n```\n{tex_source}\n```"
     )
     resp = client.messages.create(
-        model=MODEL,
+        model=model,
         max_tokens=8000,
         system=REPAIR_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
@@ -379,6 +387,7 @@ def generate_worksheet(
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
     title: Optional[str] = None,
+    model: str = MODEL,
     on_step: OnStep = _print_step,
 ) -> tuple[Path, list, "storage.WorksheetRecord"]:
     """Runs the full prompt -> questions -> LaTeX -> compile (with repair
@@ -387,7 +396,7 @@ def generate_worksheet(
     (tex_path, questions, record), where `record` is None if `bucket` is
     not given.
     """
-    questions = generate_questions(client, prompt, num_questions, on_step=on_step)
+    questions = generate_questions(client, prompt, num_questions, model=model, on_step=on_step)
 
     public_id = generate_worksheet_id()
     questions_tex = render_questions(questions)
@@ -412,13 +421,13 @@ def generate_worksheet(
             record = None
             if bucket:
                 if not title:
-                    title = generate_title(client, prompt, on_step=on_step)
+                    title = generate_title(client, prompt, model=model, on_step=on_step)
                 on_step(f"Uploading to s3://{bucket} and recording in {db_path}...")
                 record = storage.store_worksheet(
                     tex_path=tex_path,
                     questions=questions,
                     prompt=prompt,
-                    model=MODEL,
+                    model=model,
                     bucket=bucket,
                     db_path=db_path,
                     title=title,
@@ -433,7 +442,7 @@ def generate_worksheet(
         if attempt == max_repairs:
             raise CompileError(log_tail)
         on_step("Compile failed, asking model to repair...", log_tail)
-        tex_source = repair_tex(client, tex_source, log_tail)
+        tex_source = repair_tex(client, tex_source, log_tail, model=model)
         tex_path.write_text(tex_source)
 
 
@@ -448,6 +457,12 @@ def main():
     parser.add_argument("--out", default="worksheet", help="Output basename (no extension)")
     parser.add_argument("--num-questions", type=int, default=10)
     parser.add_argument("--max-repairs", type=int, default=3)
+    parser.add_argument(
+        "--model",
+        default=MODEL,
+        choices=AVAILABLE_MODELS,
+        help=f"Claude model used for generation (default: {MODEL})",
+    )
     parser.add_argument(
         "--title",
         default=None,
@@ -482,6 +497,7 @@ def main():
             bucket=args.bucket,
             db_path=args.db_path,
             title=args.title,
+            model=args.model,
         )
     except CompileError as e:
         print("Failed after max repair attempts. Log tail:\n" + e.log_tail, file=sys.stderr)

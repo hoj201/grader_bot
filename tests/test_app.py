@@ -125,6 +125,20 @@ def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
     assert any("Student work" in fu.label for fu in at.get("file_uploader"))
 
 
+def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    model_selects = [sb for sb in at.selectbox if sb.label == "Claude model"]
+    assert model_selects, "Create tab should expose a Claude model dropdown"
+    assert model_selects[0].value == "claude-haiku-4-5"
+
+
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)

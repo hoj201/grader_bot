@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 import storage
 from scan_grader import mark_scan, results_by_student
-from worksheetbot import CompileError, generate_worksheet
+from worksheetbot import AVAILABLE_MODELS, CompileError, generate_worksheet
 
 load_dotenv()
 
@@ -71,6 +71,7 @@ def render_create() -> None:
     prompt = st.text_area("Worksheet prompt", placeholder="10 question algebra worksheet on solving linear equations, grade 9")
     title = st.text_input("Title (optional)", placeholder="Auto-generated from prompt if left blank")
     num_questions = st.number_input("Number of questions", min_value=1, max_value=50, value=10)
+    model = st.selectbox("Claude model", AVAILABLE_MODELS, index=0)
     submitted = st.button("Generate worksheet", type="primary", disabled=not prompt.strip())
 
     if not submitted:
@@ -97,6 +98,7 @@ def render_create() -> None:
                 bucket=BUCKET,
                 db_path=DB_PATH,
                 title=title.strip() or None,
+                model=model,
                 on_step=on_step,
             )
         except CompileError as e:

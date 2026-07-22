@@ -6,6 +6,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from worksheetbot import (
+    AVAILABLE_MODELS,
     MODEL,
     CompileError,
     Question,
@@ -16,6 +17,7 @@ from worksheetbot import (
     generate_title,
     generate_worksheet,
     render_questions,
+    repair_tex,
 )
 
 
@@ -85,6 +87,83 @@ def test_generate_questions_sends_prompt_and_count_to_model():
     user_message = kwargs["messages"][0]["content"]
     assert "fractions worksheet" in user_message
     assert "exactly 5 questions" in user_message
+
+
+def test_default_model_is_haiku():
+    # Issue #22: the default worksheet-generation model is Haiku.
+    assert MODEL == "claude-haiku-4-5"
+    assert AVAILABLE_MODELS[0] == MODEL
+
+
+def test_generate_questions_defaults_to_default_model():
+    client = _fake_client(json.dumps([{"id": "1", "text": "q", "answer": "a"}]))
+
+    generate_questions(client, "arithmetic worksheet", 1)
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["model"] == MODEL
+
+
+def test_generate_questions_uses_explicit_model():
+    client = _fake_client(json.dumps([{"id": "1", "text": "q", "answer": "a"}]))
+
+    generate_questions(client, "arithmetic worksheet", 1, model="claude-opus-4-8")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["model"] == "claude-opus-4-8"
+
+
+def test_generate_title_uses_explicit_model():
+    client = _fake_client("Some Title")
+
+    generate_title(client, "algebra worksheet", model="claude-opus-4-8")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["model"] == "claude-opus-4-8"
+
+
+def test_repair_tex_uses_explicit_model():
+    client = _fake_client("FIXED SOURCE")
+
+    repair_tex(client, "BROKEN", "log tail", model="claude-sonnet-4-6")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["model"] == "claude-sonnet-4-6"
+
+
+def test_generate_worksheet_threads_model_through_generation_and_storage(tmp_path):
+    client = _client_with_responses(
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title"
+    )
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    db_path = tmp_path / "worksheets.sqlite3"
+    fake_record = SimpleNamespace(
+        id=1,
+        student_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/student.pdf",
+        cv_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/cv.pdf",
+        answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/answers.pdf",
+    )
+
+    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "worksheetbot.storage.store_worksheet", return_value=fake_record
+    ) as mock_store:
+        generate_worksheet(
+            client,
+            template_path,
+            "arithmetic",
+            out,
+            num_questions=1,
+            max_repairs=3,
+            bucket="my-bucket",
+            db_path=db_path,
+            model="claude-opus-4-8",
+        )
+
+    # Every generation call and the stored record use the chosen model.
+    for _, kwargs in client.messages.create.call_args_list:
+        assert kwargs["model"] == "claude-opus-4-8"
+    assert mock_store.call_args.kwargs["model"] == "claude-opus-4-8"
 
 
 def test_generate_title_returns_stripped_text():
