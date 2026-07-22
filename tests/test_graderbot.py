@@ -27,7 +27,6 @@ from graderbot import (
 from worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
-DEMO_ANSWER_KEY_PDF = Path(__file__).parent.parent / "demo_answer_key.pdf"
 
 _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
 _MARKER_IDS = (0, 1, 2, 3)  # top-left, top-right, bottom-left, bottom-right
@@ -59,8 +58,8 @@ def _marker_relative_centers(image):
 
 
 @pytest.fixture(scope="module")
-def warped_photo_png(tmp_path_factory):
-    reference_image = _render_pdf_page(DEMO_ANSWER_KEY_PDF, dpi=150)
+def warped_photo_png(tmp_path_factory, demo_pdf):
+    reference_image = _render_pdf_page(demo_pdf, dpi=150)
     height, width = reference_image.shape[:2]
 
     src_corners = np.array(
@@ -309,10 +308,10 @@ def test_rectify_to_canonical_maps_markers_to_canonical_positions():
         assert centers[marker_id][1] == pytest.approx(expected[marker_id][1], abs=3.0)
 
 
-def test_align_document_image_corrects_perspective_warp(warped_photo_png):
-    aligned_image = align_document_image(str(warped_photo_png), str(DEMO_ANSWER_KEY_PDF))
+def test_align_document_image_corrects_perspective_warp(warped_photo_png, demo_pdf):
+    aligned_image = align_document_image(str(warped_photo_png), str(demo_pdf))
 
-    reference_image = _render_pdf_page(DEMO_ANSWER_KEY_PDF, dpi=150)
+    reference_image = _render_pdf_page(demo_pdf, dpi=150)
 
     aligned_centers = _marker_relative_centers(aligned_image)
     reference_centers = _marker_relative_centers(reference_image)
