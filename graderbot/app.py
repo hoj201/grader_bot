@@ -19,7 +19,12 @@ from dotenv import load_dotenv
 
 from graderbot import storage
 from graderbot.scan_grader import mark_scan, results_by_student
-from graderbot.worksheetbot import AVAILABLE_MODELS, CompileError, generate_worksheet
+from graderbot.worksheetbot import (
+    AVAILABLE_MODELS,
+    CompileError,
+    create_worksheet_from_questions,
+    generate_worksheet,
+)
 
 load_dotenv()
 
@@ -101,8 +106,18 @@ def render_gallery() -> None:
                 with st.expander("View LaTeX source"):
                     st.code(record.tex_source, language="latex")
 
+            if record.questions_json:
+                with st.expander("View questions JSON"):
+                    st.code(record.questions_json, language="json")
+
 
 def render_create() -> None:
+    _render_create_ai()
+    st.divider()
+    _render_create_from_json()
+
+
+def _render_create_ai() -> None:
     prompt = st.text_area("Worksheet prompt", placeholder="10 question algebra worksheet on solving linear equations, grade 9")
     title = st.text_input("Title (optional)", placeholder="Auto-generated from prompt if left blank")
     num_questions = st.number_input("Number of questions", min_value=1, max_value=50, value=10)
@@ -139,6 +154,63 @@ def render_create() -> None:
         except CompileError as e:
             status.update(label="Compilation failed", state="error")
             st.error(f"LaTeX compilation failed after repair attempts:\n\n{e.log_tail}")
+            return
+
+        status.update(label="Done", state="complete")
+
+    st.success(f"Created worksheet id={record.id}")
+    st.rerun()
+
+
+def _render_create_from_json() -> None:
+    st.subheader("Or enter questions as JSON")
+    st.caption(
+        "Provide the questions yourself instead of having Claude write them. "
+        "The LaTeX is compiled once (no auto-repair); fix the JSON if it fails."
+    )
+    questions_json = st.text_area(
+        "Questions JSON",
+        placeholder='[{"id": "1", "text": "$2+2=$", "answer": "4"}, '
+        '{"id": "2", "text": "$\\\\frac{1}{2}+\\\\frac{1}{4}=$", "answer": "\\\\frac{3}{4}"}]',
+        key="manual_questions_json",
+    )
+    title = st.text_input("Title", key="manual_title", placeholder="Required")
+    submitted = st.button(
+        "Create from JSON",
+        type="primary",
+        disabled=not (questions_json.strip() and title.strip()),
+        key="manual_submit",
+    )
+
+    if not submitted:
+        return
+
+    out = Path("generated") / uuid4().hex[:8] / "worksheet"
+
+    with st.status("Creating worksheet...", expanded=True) as status:
+        def on_step(msg: str, detail: str | None = None) -> None:
+            status.update(label=msg)
+            st.write(msg)
+            if detail:
+                st.code(detail, language=None)
+
+        try:
+            _, _, record = create_worksheet_from_questions(
+                questions_json,
+                TEMPLATE_PATH,
+                out,
+                title=title.strip(),
+                bucket=BUCKET,
+                db_path=DB_PATH,
+                on_step=on_step,
+            )
+        except ValueError as e:
+            status.update(label="Invalid questions JSON", state="error")
+            st.error(str(e))
+            return
+        except CompileError as e:
+            status.update(label="Compilation failed", state="error")
+            st.error(f"LaTeX compilation failed:\n\n{e.log_tail}")
             return
 
         status.update(label="Done", state="complete")
