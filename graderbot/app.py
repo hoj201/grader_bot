@@ -97,6 +97,10 @@ def render_gallery() -> None:
                         st.session_state[confirm_key] = True
                         st.rerun()
 
+            if record.tex_source:
+                with st.expander("View LaTeX source"):
+                    st.code(record.tex_source, language="latex")
+
 
 def render_create() -> None:
     prompt = st.text_area("Worksheet prompt", placeholder="10 question algebra worksheet on solving linear equations, grade 9")
