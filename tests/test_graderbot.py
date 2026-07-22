@@ -19,7 +19,6 @@ from graderbot import (
     extract_name,
     grade_hw,
     is_correct,
-    load_image_rgb,
     load_pdf_pages_rgb,
     load_scan_pages,
     read_box,
@@ -166,11 +165,19 @@ def test_load_scan_pages_reads_pdf_pages_and_single_raster(tmp_path):
 def test_read_box_reads_handwritten_answers(boxes):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
+    if shutil.which("latexmk") is None:
+        pytest.skip("latexmk is not installed")
 
-    answer_key_image = load_image_rgb(str(DEMO_ANSWER_KEY_PDF))
+    # Render the answers at runtime from the current worksheet layout rather
+    # than reading a static fixture: `read_box` applies the box coordinates
+    # (extracted from a fresh compile) directly to this image with no marker
+    # alignment, so a checked-in PDF silently drifts out of sync whenever the
+    # layout changes. See the sibling fraction test for the same pattern.
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"add001": "12", "sub001": "11"})
+    filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
-    assert read_box(answer_key_image, boxes["add001"]) == "12"
-    assert read_box(answer_key_image, boxes["sub001"]) == "11"
+    assert read_box(filled_image, boxes["add001"]) == "12"
+    assert read_box(filled_image, boxes["sub001"]) == "11"
 
 
 def test_read_box_reads_a_handwritten_fraction(boxes):
