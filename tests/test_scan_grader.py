@@ -172,6 +172,68 @@ def test_results_by_student_transposes_to_display_shape(db_with_two_worksheets, 
     assert set(by_student["Carol White"]) == {"ws_2"}
 
 
+def test_grade_scans_reports_progress_via_on_step(db_with_two_worksheets, patched_cv):
+    messages = []
+    grade_scans(
+        ["alice.png"],
+        roster=["Alice Smith"],
+        db_path=db_with_two_worksheets,
+        on_step=lambda msg, detail=None: messages.append(msg),
+    )
+
+    joined = "\n".join(messages)
+    assert "decoded worksheet id=ws_1" in joined
+    assert "graded Alice Smith -- 2/2 correct" in joined
+
+
+def test_on_step_distinguishes_rectify_from_qr_failure(
+    db_with_two_worksheets, patched_cv, monkeypatch
+):
+    # "skew.png" fails rectification; "blank.png" rectifies but its QR won't decode.
+    real_rectify = scan_grader.rectify_to_canonical
+
+    def rectify(image):
+        if image == "skew.png":
+            raise ValueError("no markers")
+        return real_rectify(image)
+
+    monkeypatch.setattr(scan_grader, "rectify_to_canonical", rectify)
+
+    messages = []
+    result = grade_scans(
+        ["skew.png", "blank.png"],
+        roster=[],
+        db_path=db_with_two_worksheets,
+        on_step=lambda msg, detail=None: messages.append(msg),
+    )
+
+    assert result.unreadable == ["skew.png", "blank.png"]
+    joined = "\n".join(messages)
+    assert "skew.png: could not rectify" in joined
+    assert "blank.png: rectified OK, but the worksheet QR code could not be decoded" in joined
+
+
+def test_mark_scan_reports_pdf_render_via_on_step(
+    db_with_two_worksheets, patched_cv, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        scan_grader,
+        "render_marked_page",
+        lambda image, results, boxes: np.full((20, 20, 3), 255, dtype=np.uint8),
+    )
+    messages = []
+    mark_scan(
+        ["alice.png"],
+        roster=["Alice Smith"],
+        db_path=db_with_two_worksheets,
+        out_path=tmp_path / "marked.pdf",
+        on_step=lambda msg, detail=None: messages.append(msg),
+    )
+
+    assert any("Rendering marked-up PDF" in m for m in messages)
+    assert any("Wrote marked-up PDF" in m for m in messages)
+
+
 def test_mark_scan_writes_no_pdf_when_nothing_grades(
     db_with_two_worksheets, patched_cv, tmp_path
 ):

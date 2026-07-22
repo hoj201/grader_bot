@@ -255,8 +255,17 @@ def render_grade() -> None:
         scan_path.write_bytes(uploaded.getvalue())
         marked_path = Path(tmp) / "marked.pdf"
 
-        with st.spinner("Grading..."):
-            result = mark_scan([scan_path], roster, DB_PATH, marked_path)
+        with st.status("Grading...", expanded=True) as status:
+            def on_step(msg: str, detail: str | None = None) -> None:
+                status.update(label=msg)
+                st.write(msg)
+                if detail:
+                    st.code(detail, language=None)
+
+            result = mark_scan(
+                [scan_path], roster, DB_PATH, marked_path, on_step=on_step
+            )
+            status.update(label="Grading complete", state="complete")
 
         graded = _display_results(result)
         if not graded:

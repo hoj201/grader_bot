@@ -14,11 +14,12 @@ locations come from `storage` (`get_worksheet_by_public_id`,
 """
 
 import json
+import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from sqlite3 import Connection
-from typing import Dict, List, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -35,6 +36,18 @@ _NAME_BOX_ID = "name"
 
 # Per-student grading: question id -> QuestionResult (answer/response/correct).
 StudentResults = Dict[str, QuestionResult]
+
+# Progress callback, mirroring graderbot.worksheetbot.OnStep: a short message and
+# an optional multi-line detail string. Used to stream grading progress into the
+# Streamlit UI (or the console) so a failed QR/rectify can be pinned to a page.
+OnStep = Callable[[str, Optional[str]], None]
+
+
+def _print_step(msg: str, detail: Optional[str] = None) -> None:
+    """Default `on_step`: prints to stderr, optionally with detail."""
+    print(msg, file=sys.stderr)
+    if detail:
+        print(detail, file=sys.stderr)
 
 
 @dataclass
@@ -69,28 +82,43 @@ def _grade_batch(
     hws: List[Union[str, Path]],
     roster: List[str],
     conn: Connection,
+    on_step: OnStep = _print_step,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
     """Shared core of `grade_scans`/`mark_scan`: rectifies every scan page to the
     canonical frame, groups pages by decoded worksheet id, and grades each group
     against its stored answer key. Grading runs on the rectified image so a
     marked-up render lands its marks in the same aligned frame. Returns the
-    summary result plus, in scan order, the per-page graded material."""
+    summary result plus, in scan order, the per-page graded material.
+
+    `on_step(msg, detail)` receives per-page progress, separating the two ways a
+    page becomes "unreadable" -- rectification (ArUco markers not found) versus
+    QR-code decode -- so a failure can be pinned to the exact page and stage."""
     # Group rectified pages by decoded worksheet id.
     grouped: Dict[str, List[Tuple[str, np.ndarray]]] = defaultdict(list)
     result = ScanBatchResult()
     for hw in hws:
         pages = load_scan_pages(str(hw))
+        on_step(f"Loaded {hw}: {len(pages)} page(s).")
         for page_index, page in enumerate(pages):
             label = str(hw) if len(pages) == 1 else f"{hw} (page {page_index + 1})"
             try:
                 rectified = rectify_to_canonical(page)
             except ValueError:
                 result.unreadable.append(label)
+                on_step(
+                    f"{label}: could not rectify to canonical frame "
+                    "(ArUco registration markers not found)."
+                )
                 continue
             worksheet_id = read_worksheet_id(rectified)
             if not worksheet_id:
                 result.unreadable.append(label)
+                on_step(
+                    f"{label}: rectified OK, but the worksheet QR code "
+                    "could not be decoded."
+                )
                 continue
+            on_step(f"{label}: decoded worksheet id={worksheet_id}.")
             grouped[worksheet_id].append((label, rectified))
 
     graded_scans: List[_GradedScan] = []
@@ -98,6 +126,10 @@ def _grade_batch(
         record = get_worksheet_by_public_id(conn, worksheet_id)
         if record is None or not record.boxes_json or not record.questions_json:
             result.unknown_worksheets[worksheet_id] = [label for label, _ in items]
+            on_step(
+                f"Worksheet id={worksheet_id} not found (or incompletely stored) "
+                f"in the database; skipping {len(items)} page(s)."
+            )
             continue
 
         answer_key = {q["id"]: q["answer"] for q in json.loads(record.questions_json)}
@@ -108,10 +140,15 @@ def _grade_batch(
         }
 
         student_results: Dict[str, StudentResults] = {}
-        for _label, image in items:
+        for label, image in items:
             name = extract_name(image, name_box, roster) if name_box is not None else ""
             results = grade_hw(answer_key, question_boxes, image)
             student_results[name] = results
+            n_correct = sum(1 for r in results.values() if r.correct)
+            on_step(
+                f"{label}: graded {name or '(no name)'} -- "
+                f"{n_correct}/{len(results)} correct."
+            )
             graded_scans.append(
                 _GradedScan(worksheet_id, name, image, question_boxes, results)
             )
@@ -134,13 +171,15 @@ def grade_scans(
     hws: List[Union[str, Path]],
     roster: List[str],
     db_path: Union[str, Path],
+    on_step: OnStep = _print_step,
 ) -> ScanBatchResult:
     """Grades each scan in `hws` against the worksheet its QR code identifies,
     fetched from the database at `db_path`. Student names are resolved against
-    `roster`. See `ScanBatchResult` for the return shape."""
+    `roster`. `on_step` streams per-page progress (see `_grade_batch`). See
+    `ScanBatchResult` for the return shape."""
     conn = init_db(Path(db_path))
     try:
-        result, _ = _grade_batch(hws, roster, conn)
+        result, _ = _grade_batch(hws, roster, conn, on_step=on_step)
         return result
     finally:
         conn.close()
@@ -151,17 +190,19 @@ def mark_scan(
     roster: List[str],
     db_path: Union[str, Path],
     out_path: Union[str, Path],
+    on_step: OnStep = _print_step,
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
     scan, each stamped with a score header and the correct answers beside the
-    wrong ones. Returns the same `ScanBatchResult` (scans that were unreadable or
-    whose worksheet is unknown contribute no page). No PDF is written if nothing
-    graded."""
+    wrong ones. `on_step` streams per-page progress (see `_grade_batch`). Returns
+    the same `ScanBatchResult` (scans that were unreadable or whose worksheet is
+    unknown contribute no page). No PDF is written if nothing graded."""
     conn = init_db(Path(db_path))
     try:
-        result, graded = _grade_batch(hws, roster, conn)
+        result, graded = _grade_batch(hws, roster, conn, on_step=on_step)
         if graded:
+            on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")
             marked_bgr = [
                 cv2.cvtColor(
                     render_marked_page(scan.image, scan.results, scan.question_boxes),
@@ -170,6 +211,7 @@ def mark_scan(
                 for scan in graded
             ]
             images_to_pdf(marked_bgr, Path(out_path))
+            on_step(f"Wrote marked-up PDF to {out_path}.")
         return result
     finally:
         conn.close()
