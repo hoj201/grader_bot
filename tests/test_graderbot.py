@@ -17,6 +17,8 @@ from graderbot.imaging import (
 from graderbot.models import Box, QuestionResult
 from graderbot.ocr import extract_name, read_box
 from graderbot.registration import (
+    _MARKER_INSET_IN,
+    _MARKER_SIZE_IN,
     _canonical_marker_centers,
     _detect_marker_centers,
     align_document_image,
@@ -275,8 +277,8 @@ def _make_canonical_worksheet_image(dpi):
     where gbworksheet.sty puts them (so their centers are canonical)."""
     width = round(8.5 * dpi)
     height = round(11 * dpi)
-    size_px = round(0.75 * dpi)
-    inset_px = round(0.15 * dpi)
+    size_px = round(_MARKER_SIZE_IN * dpi)
+    inset_px = round(_MARKER_INSET_IN * dpi)
     image = np.full((height, width, 3), 255, dtype=np.uint8)
     corners = {
         0: (inset_px, inset_px),
@@ -318,6 +320,27 @@ def test_rectify_to_canonical_maps_markers_to_canonical_positions():
     for marker_id in (0, 1, 2, 3):
         assert centers[marker_id][0] == pytest.approx(expected[marker_id][0], abs=3.0)
         assert centers[marker_id][1] == pytest.approx(expected[marker_id][1], abs=3.0)
+
+
+def test_markers_survive_printer_margin_clip():
+    """The marker inset must keep the fiducials clear of a printer's
+    non-printable margin: even after the outer 0.25in of the page is clipped
+    (whitened), all four markers must still decode. Guards against regressing
+    the inset back toward the paper edge, which clipped marker borders and
+    defeated detection on real printouts (issue #35)."""
+    dpi = 150
+    clip_in = 0.25
+    canonical = _make_canonical_worksheet_image(dpi)
+
+    clipped = canonical.copy()
+    m = round(clip_in * dpi)
+    clipped[:m, :] = 255
+    clipped[-m:, :] = 255
+    clipped[:, :m] = 255
+    clipped[:, -m:] = 255
+
+    centers = _detect_marker_centers(clipped, "clipped")
+    assert set(centers) == {0, 1, 2, 3}
 
 
 def test_align_document_image_corrects_perspective_warp(warped_photo_png, demo_pdf):

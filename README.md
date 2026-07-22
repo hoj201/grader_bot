@@ -152,4 +152,6 @@ streamlit run graderbot/app.py
 ## Fly.io
 We currently deploy to fly.io at the url https://grader-bot.fly.dev
 
-Deployment is **not** automated on every update to the `main` branch.  It must be initiated manually.
+Deployment is automated: every push to the `main` branch triggers a deploy to
+fly.io. To deploy, merge/push your changes to `main`. (You can still deploy
+manually with `fly deploy` if needed.)
