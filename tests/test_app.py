@@ -7,14 +7,14 @@ from graderbot import storage
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
 
 
-def _seed_worksheet(db_path, title=None):
+def _seed_worksheet(db_path, title=None, questions_json="[]"):
     conn = storage.init_db(db_path)
     storage.insert_worksheet(
         conn,
         storage.WorksheetRecord(
             prompt="10 question algebra worksheet",
             tex_source=r"\documentclass{article}",
-            questions_json="[]",
+            questions_json=questions_json,
             model="claude-sonnet-4-6",
             num_questions=10,
             title=title,
@@ -137,6 +137,22 @@ def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatc
     model_selects = [sb for sb in at.selectbox if sb.label == "Claude model"]
     assert model_selects, "Create tab should expose a Claude model dropdown"
     assert model_selects[0].value == "claude-haiku-4-5"
+
+
+def test_gallery_tab_exposes_questions_json_expander(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    questions_json = '[{"id": "1", "text": "$2+2=$", "answer": "4"}]'
+    _seed_worksheet(db_path, questions_json=questions_json)
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    expander_labels = [ex.label for ex in at.expander]
+    assert "View questions JSON" in expander_labels
+    code_values = [c.value for c in at.code]
+    assert questions_json in code_values
 
 
 def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):

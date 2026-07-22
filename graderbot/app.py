@@ -106,6 +106,10 @@ def render_gallery() -> None:
                 with st.expander("View LaTeX source"):
                     st.code(record.tex_source, language="latex")
 
+            if record.questions_json:
+                with st.expander("View questions JSON"):
+                    st.code(record.questions_json, language="json")
+
 
 def render_create() -> None:
     _render_create_ai()
