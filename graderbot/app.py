@@ -36,6 +36,14 @@ def get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 
+def _delete_worksheet(record) -> None:
+    conn = storage.init_db(DB_PATH)
+    try:
+        storage.delete_worksheet(conn, record)
+    finally:
+        conn.close()
+
+
 def render_gallery() -> None:
     conn = storage.init_db(DB_PATH)
     records = storage.list_worksheets(conn)
@@ -55,7 +63,7 @@ def render_gallery() -> None:
                 f"id={record.id} · {record.num_questions} questions · "
                 f"{record.model} · sty={sty_version} · {record.created_at}"
             )
-            cols = st.columns(3)
+            cols = st.columns(4)
             for col, label, url in zip(
                 cols,
                 ("Student", "CV", "Answer key"),
@@ -68,6 +76,26 @@ def render_gallery() -> None:
                         st.link_button(label, presigned, use_container_width=True)
                     else:
                         st.button(label, disabled=True, use_container_width=True)
+
+            confirm_key = f"confirm_delete_{record.id}"
+            with cols[3]:
+                if st.session_state.get(confirm_key):
+                    st.warning(f"Delete '{record.title or record.prompt}'? This cannot be undone.")
+                    yes, no = st.columns(2)
+                    if yes.button("Confirm delete", key=f"do_delete_{record.id}",
+                                  type="primary", use_container_width=True):
+                        _delete_worksheet(record)
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                    if no.button("Cancel", key=f"cancel_delete_{record.id}",
+                                 use_container_width=True):
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                else:
+                    if st.button("Delete", key=f"ask_delete_{record.id}",
+                                 use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
 
 
 def render_create() -> None:

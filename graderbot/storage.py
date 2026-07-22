@@ -292,6 +292,11 @@ def generate_presigned_url(bucket: str, key: str, s3_client=None, expires_in: in
     )
 
 
+def delete_from_s3(bucket: str, key: str, s3_client=None) -> None:
+    client = s3_client if s3_client is not None else _default_s3_client()
+    client.delete_object(Bucket=bucket, Key=key)
+
+
 # --------------------------------------------------------------------------
 # PDF generation
 # --------------------------------------------------------------------------
@@ -378,3 +383,17 @@ def store_worksheet(
     conn.close()
 
     return record
+
+
+def delete_worksheet(conn: Connection, record: WorksheetRecord, s3_client=None) -> None:
+    """Deletes a worksheet's S3 blobs (student/cv/answer-key PDFs) and its
+    WORKSHEET row. S3 deletes happen first and strictly: if any raises, the
+    error propagates and the SQLite row is left intact so nothing is left in a
+    half-deleted state."""
+    for url in (record.student_pdf_s3url, record.cv_pdf_s3url, record.answers_pdf_s3url):
+        if url:
+            bucket, key = parse_s3_url(url)
+            delete_from_s3(bucket, key, s3_client=s3_client)
+
+    conn.execute("DELETE FROM WORKSHEET WHERE id = ?", (record.id,))
+    conn.commit()

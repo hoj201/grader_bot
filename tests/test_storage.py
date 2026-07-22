@@ -13,6 +13,8 @@ from graderbot.storage import (
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
+    delete_from_s3,
+    delete_worksheet,
     deserialize_boxes,
     generate_answer_key_pdf,
     generate_presigned_url,
@@ -640,3 +642,82 @@ def test_generate_presigned_url_contains_bucket_and_key():
 
     assert bucket in url
     assert "worksheet/student.pdf" in url
+
+
+# --------------------------------------------------------------------------
+# delete_from_s3
+# --------------------------------------------------------------------------
+
+@mock_aws
+def test_delete_from_s3_removes_object(tmp_path):
+    bucket = "graderbot-test-bucket"
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket=bucket)
+    s3_client.put_object(Bucket=bucket, Key="worksheet/student.pdf", Body=b"pdf")
+
+    delete_from_s3(bucket, "worksheet/student.pdf", s3_client=s3_client)
+
+    with pytest.raises(s3_client.exceptions.NoSuchKey):
+        s3_client.get_object(Bucket=bucket, Key="worksheet/student.pdf")
+
+
+# --------------------------------------------------------------------------
+# delete_worksheet
+# --------------------------------------------------------------------------
+
+@mock_aws
+def test_delete_worksheet_removes_blobs_and_row(tmp_path):
+    bucket = "graderbot-test-bucket"
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket=bucket)
+    keys = ("ws/student.pdf", "ws/cv.pdf", "ws/answers.pdf")
+    for key in keys:
+        s3_client.put_object(Bucket=bucket, Key=key, Body=b"pdf")
+
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record(
+        student_pdf_s3url=f"https://{bucket}.s3.amazonaws.com/ws/student.pdf",
+        cv_pdf_s3url=f"https://{bucket}.s3.amazonaws.com/ws/cv.pdf",
+        answers_pdf_s3url=f"https://{bucket}.s3.amazonaws.com/ws/answers.pdf",
+    )
+    record.id = insert_worksheet(conn, record)
+
+    delete_worksheet(conn, record, s3_client=s3_client)
+
+    assert list_worksheets(conn) == []
+    for key in keys:
+        with pytest.raises(s3_client.exceptions.NoSuchKey):
+            s3_client.get_object(Bucket=bucket, Key=key)
+
+
+@mock_aws
+def test_delete_worksheet_skips_null_urls(tmp_path):
+    bucket = "graderbot-test-bucket"
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket=bucket)
+    s3_client.put_object(Bucket=bucket, Key="ws/student.pdf", Body=b"pdf")
+
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record(
+        student_pdf_s3url=f"https://{bucket}.s3.amazonaws.com/ws/student.pdf",
+        cv_pdf_s3url=None,
+        answers_pdf_s3url=None,
+    )
+    record.id = insert_worksheet(conn, record)
+
+    delete_worksheet(conn, record, s3_client=s3_client)  # must not raise on None urls
+
+    assert list_worksheets(conn) == []
+
+
+def test_delete_worksheet_aborts_and_keeps_row_when_s3_delete_fails(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record()
+    record.id = insert_worksheet(conn, record)
+
+    with patch("graderbot.storage.delete_from_s3", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            delete_worksheet(conn, record, s3_client=object())
+
+    # Strict: the row must survive when an S3 delete fails.
+    assert [r.id for r in list_worksheets(conn)] == [record.id]
