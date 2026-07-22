@@ -16,7 +16,7 @@ Requires: ANTHROPIC_API_KEY env var, `anthropic` python package, a LaTeX
 distribution with `latexmk` on PATH.
 
 Usage:
-  python worksheetbot.py --template worksheet_template.tex \
+  python -m graderbot.worksheetbot --template tex/worksheet_template.tex \
       --prompt "10 question algebra worksheet on solving linear equations, grade 9" \
       --out worksheet --num-questions 10 --max-repairs 3
 """
@@ -32,9 +32,9 @@ from typing import Callable, Optional
 
 import anthropic
 
-import storage
-from worksheet_qr import generate_worksheet_id, render_qr_png
-from worksheet_synth import _texinputs_env
+from graderbot import storage
+from graderbot.worksheet_qr import generate_worksheet_id, render_qr_png
+from graderbot.worksheet_synth import _texinputs_env
 
 # Models the worksheet-generation pipeline can run against. The first entry is
 # the default (issue #22). Threaded through every client.messages.create call

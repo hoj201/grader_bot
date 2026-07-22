@@ -16,4 +16,4 @@ if [ -n "$S3_BUCKET" ]; then
     litestream replicate -config /app/litestream.yml &
 fi
 
-exec streamlit run app.py --server.port "${PORT:-8501}" --server.address 0.0.0.0
+exec streamlit run graderbot/app.py --server.port "${PORT:-8501}" --server.address 0.0.0.0

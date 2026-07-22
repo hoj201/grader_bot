@@ -5,7 +5,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
-from worksheetbot import (
+from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
     MODEL,
     CompileError,
@@ -145,8 +145,8 @@ def test_generate_worksheet_threads_model_through_generation_and_storage(tmp_pat
         answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/answers.pdf",
     )
 
-    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
-        "worksheetbot.storage.store_worksheet", return_value=fake_record
+    with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
     ) as mock_store:
         generate_worksheet(
             client,
@@ -315,7 +315,7 @@ def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_
     template_path = _template(tmp_path)
     out = tmp_path / "worksheet"
 
-    with patch("worksheetbot.compile_tex", return_value=(True, "")):
+    with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")):
         tex_path, questions, record = generate_worksheet(
             client, template_path, "arithmetic", out, num_questions=1, max_repairs=3
         )
@@ -341,8 +341,8 @@ def test_generate_worksheet_stores_when_bucket_given(tmp_path):
         answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/answers.pdf",
     )
 
-    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
-        "worksheetbot.storage.store_worksheet", return_value=fake_record
+    with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
     ) as mock_store:
         tex_path, questions, record = generate_worksheet(
             client,
@@ -380,9 +380,9 @@ def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path)
         answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/Given_Title_answers.pdf",
     )
 
-    with patch("worksheetbot.compile_tex", return_value=(True, "")), patch(
-        "worksheetbot.storage.store_worksheet", return_value=fake_record
-    ) as mock_store, patch("worksheetbot.generate_title") as mock_generate_title:
+    with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
+    ) as mock_store, patch("graderbot.worksheetbot.generate_title") as mock_generate_title:
         generate_worksheet(
             client,
             template_path,
@@ -414,8 +414,8 @@ def test_generate_worksheet_repairs_and_succeeds_on_retry(tmp_path):
     out = tmp_path / "worksheet"
 
     with patch(
-        "worksheetbot.compile_tex", side_effect=[(False, "log tail"), (True, "")]
-    ), patch("worksheetbot.repair_tex", return_value="FIXED SOURCE") as mock_repair:
+        "graderbot.worksheetbot.compile_tex", side_effect=[(False, "log tail"), (True, "")]
+    ), patch("graderbot.worksheetbot.repair_tex", return_value="FIXED SOURCE") as mock_repair:
         tex_path, questions, record = generate_worksheet(
             client, template_path, "arithmetic", out, num_questions=1, max_repairs=3
         )
@@ -431,8 +431,8 @@ def test_generate_worksheet_raises_compile_error_after_max_repairs(tmp_path):
     out = tmp_path / "worksheet"
 
     with patch(
-        "worksheetbot.compile_tex", return_value=(False, "persistent failure")
-    ), patch("worksheetbot.repair_tex", return_value="STILL BROKEN") as mock_repair:
+        "graderbot.worksheetbot.compile_tex", return_value=(False, "persistent failure")
+    ), patch("graderbot.worksheetbot.repair_tex", return_value="STILL BROKEN") as mock_repair:
         with pytest.raises(CompileError) as exc_info:
             generate_worksheet(
                 client, template_path, "arithmetic", out, num_questions=1, max_repairs=1

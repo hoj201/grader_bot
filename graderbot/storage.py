@@ -21,11 +21,11 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from graderbot import Box, extract_answer_boxes
-from worksheet_synth import WORKSHEET_STY_PATH, fill_worksheet, latexmk_worksheet
+from graderbot.core import Box, extract_answer_boxes
+from graderbot.worksheet_synth import WORKSHEET_STY_PATH, fill_worksheet, latexmk_worksheet
 
 if TYPE_CHECKING:
-    from worksheetbot import Question
+    from graderbot.worksheetbot import Question
 
 
 @dataclass

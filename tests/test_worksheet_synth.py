@@ -4,8 +4,8 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot import extract_answer_boxes
-from worksheet_synth import (
+from graderbot.core import extract_answer_boxes
+from graderbot.worksheet_synth import (
     add_image_noise,
     fill_worksheet,
     latexmk_worksheet,
@@ -13,7 +13,7 @@ from worksheet_synth import (
     write_on_image,
 )
 
-DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
+DEMO_TEX = Path(__file__).parent.parent / "tex" / "demo.tex"
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "HomemadeApple-Regular.ttf"
 
 

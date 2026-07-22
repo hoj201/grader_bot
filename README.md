@@ -1,14 +1,16 @@
 # Description
-GraderBot is a code-base for generating arithmetic worksheets that can be auto-graded.  Worksheets are generated in latex in two modes: `cv mode=true` or `cv mode=false`.  See `demo.tex` for reference.
+GraderBot is a code-base for generating arithmetic worksheets that can be auto-graded.  Worksheets are generated in latex in two modes: `cv mode=true` or `cv mode=false`.  See `tex/demo.tex` for reference.
 
-The compile command is
+The LaTeX sources (`gbworksheet.sty`, `questions.sty`, the templates, and the
+generated `aruco_images/` markers) live in the `tex/` directory. Compile from
+there:
 ```
-latexmk -pdf demo.tex
+cd tex && latexmk -pdf demo.tex
 ```
 
 To clean the directory run
 ```
-latexmk -c demo.tex
+cd tex && latexmk -c demo.tex
 ```
 
 or use `-C` if you also want the `.pdf` file removed.
@@ -16,31 +18,31 @@ or use `-C` if you also want the `.pdf` file removed.
 ## CV mode
 If you would like to control the value of `cv mode` from the command line at compilation time then do
 ```shell
-latexmk -pdf -usepretex='\def\WSCVMode{0}' demo.tex 
+cd tex && latexmk -pdf -usepretex='\def\WSCVMode{0}' demo.tex 
 ```
 for `cv mode = false`.  For `cv mode = true` just change the 0 into a 1 in the above command.
 
 
 ## Sythesizing Student Work
-The [worksheet_synth](./worksheet_synth.py) python module is for making synthetic images of student work.  It can compile latex, fill in answer boxes, and add noise and perspective skewing.  This is primarily useful for making unit-tests for grader bot, which is concerned primarily with inverting the `worksheet_synth` module.  Here is an example code-snippet
+The [worksheet_synth](./graderbot/worksheet_synth.py) python module is for making synthetic images of student work.  It can compile latex, fill in answer boxes, and add noise and perspective skewing.  This is primarily useful for making unit-tests for grader bot, which is concerned primarily with inverting the `worksheet_synth` module.  Here is an example code-snippet
 
 ```python
 import cv2
-from worksheet_synth import fill_worksheet, perspective_skew_image, add_image_noise
+from graderbot.worksheet_synth import fill_worksheet, perspective_skew_image, add_image_noise
 import numpy as np
 
-filled = fill_worksheet('demo.tex', {'add001': '12', 'sub001': r'\frac{3}{5}'})
+filled = fill_worksheet('tex/demo.tex', {'add001': '12', 'sub001': r'\frac{3}{5}'})
 skewed = perspective_skew_image(filled, max_skew=0.02, rng=np.random.default_rng(42))
 noisy = add_image_noise(skewed, noise_level=0.05, rng=np.random.default_rng(7))
 cv2.imwrite('output_filename.png', noisy)
 ```
 
 ## Worksheet storage (S3 + SQLite)
-The [worksheetbot](./worksheetbot.py) pipeline can upload the generated PDFs
+The [worksheetbot](./graderbot/worksheetbot.py) pipeline can upload the generated PDFs
 (student/blank, cv, and answer key) to S3 and record them, along with the
 `.tex` source and question JSON, in a SQLite database via
-[storage.py](./storage.py). This is opt-in: pass `--bucket` (or set the
-`S3_BUCKET` env var) when running `worksheetbot.py`. If no bucket is
+[storage.py](./graderbot/storage.py). This is opt-in: pass `--bucket` (or set the
+`S3_BUCKET` env var) when running `python -m graderbot.worksheetbot`. If no bucket is
 configured, the worksheet is still compiled but nothing is uploaded or
 stored.
 
@@ -85,8 +87,11 @@ stored.
    WORKSHEETS_DB_PATH=worksheets.sqlite3
    ```
    `litestream.yml` reads its DB path from `WORKSHEETS_DB_PATH`, so this must
-   be set (and match the path used by `app.py`/`worksheetbot.py`) for
+   be set (and match the path used by `graderbot/app.py` / `graderbot.worksheetbot`) for
    replication to point at the right file.
+   (The `graderbot` package is imported top-level, so run tests and scripts from
+   the repo root — `pytest` picks up `pythonpath = ["."]` automatically, and for
+   ad-hoc runs use `python -m graderbot.<module>` or set `PYTHONPATH=.`.)
 
 ### Backups
 The SQLite database (`worksheets.sqlite3` by default) is meant to be
@@ -103,8 +108,8 @@ brew install benbjohnson/litestream/litestream
 
 `litestream.yml` references `${S3_BUCKET}`, so export `.env` before starting
 replication. Start it manually, once per development session, in its own
-terminal (or backgrounded), before running `worksheetbot.py` or
-`streamlit run app.py`:
+terminal (or backgrounded), before running `python -m graderbot.worksheetbot` or
+`streamlit run graderbot/app.py`:
 ```shell
 set -a; source .env; set +a
 litestream replicate -config litestream.yml
@@ -125,10 +130,10 @@ MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
 ## Web frontend
-[app.py](./app.py) is a Streamlit app with three tabs: **Gallery**, to browse
+[app.py](./graderbot/app.py) is a Streamlit app with three tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
 presigned S3 links; **Create**, to generate a new worksheet from a
-prompt (runs the same pipeline as `worksheetbot.py`, including S3 upload +
+prompt (runs the same pipeline as `graderbot.worksheetbot`, including S3 upload +
 DB storage); and **Grade**, to upload a PDF of scanned student work and have
 it auto-graded. Each page's QR code is matched to its stored worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
@@ -136,9 +141,10 @@ as per-student JSON results and as a single marked-up PDF (a score header on
 each page, correct answers written beside the wrong ones). It requires
 `S3_BUCKET` and `ANTHROPIC_API_KEY` to be set (see
 above); it reads/writes the same `worksheets.sqlite3` database as the CLI by
-default (override with the `WORKSHEETS_DB_PATH` env var). Run it with:
+default (override with the `WORKSHEETS_DB_PATH` env var). Run it from the repo
+root with:
 ```shell
-streamlit run app.py
+streamlit run graderbot/app.py
 ```
 
 ## Fly.io

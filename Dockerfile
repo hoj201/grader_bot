@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 
-# TeX Live packages needed to compile worksheet_template.tex (geometry,
+# TeX Live packages needed to compile tex/worksheet_template.tex (geometry,
 # graphicx, tikz, tikzpagenodes, xcolor, calc) via latexmk. Deliberately
 # scoped rather than texlive-full to keep the image size manageable.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,9 +30,15 @@ RUN poetry install --only main --no-root --no-interaction
 
 COPY . .
 
-# Marker images referenced by gbworksheet.sty (*.png is gitignored, so they
-# must be generated at build time rather than committed).
-RUN python generate_aruco.py
+# The app modules live in the top-level `graderbot` package; put the repo root
+# on the import path so `streamlit run graderbot/app.py` and `python -m
+# graderbot.*` resolve `import graderbot`.
+ENV PYTHONPATH=/app
+
+# Marker images referenced by gbworksheet.sty (written to tex/aruco_images/;
+# *.png is gitignored, so they must be generated at build time rather than
+# committed).
+RUN python scripts/generate_aruco.py
 
 ENV WORKSHEETS_DB_PATH=/data/worksheets.sqlite3
 

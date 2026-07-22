@@ -15,22 +15,26 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-_DEFAULT_FONT = str(Path(__file__).parent / "fonts" / "HomemadeApple-Regular.ttf")
+# This module lives at <repo>/graderbot/, so the repo root is two levels up.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_TEX_DIR = _REPO_ROOT / "tex"
+
+_DEFAULT_FONT = str(_REPO_ROOT / "fonts" / "HomemadeApple-Regular.ttf")
 _DEFAULT_TEXT_SIZE = 36
 _FRAC_RE = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
 
-# gbworksheet.sty/questions.sty live at the repo root, not in the TeX
-# distribution. latexmk/pdflatex must be able to find them even when the
-# .tex file being compiled lives elsewhere (e.g. app.py writes into
-# generated/<uuid>/), so point TEXINPUTS at the repo root. The trailing
-# "::" preserves the default kpathsea search path.
-_REPO_ROOT = Path(__file__).parent.resolve()
-WORKSHEET_STY_PATH = _REPO_ROOT / "gbworksheet.sty"
+# gbworksheet.sty/questions.sty live in <repo>/tex/, not in the TeX
+# distribution, alongside the aruco_images/ markers they reference.
+# latexmk/pdflatex must be able to find them even when the .tex file being
+# compiled lives elsewhere (e.g. app.py writes into generated/<uuid>/), so
+# point TEXINPUTS at the tex/ dir. The trailing "::" preserves the default
+# kpathsea search path.
+WORKSHEET_STY_PATH = _TEX_DIR / "gbworksheet.sty"
 
 
 def _texinputs_env() -> Dict[str, str]:
     env = os.environ.copy()
-    env["TEXINPUTS"] = f"{_REPO_ROOT}::{env.get('TEXINPUTS', '')}"
+    env["TEXINPUTS"] = f"{_TEX_DIR}::{env.get('TEXINPUTS', '')}"
     return env
 
 
@@ -221,7 +225,7 @@ def fill_worksheet(
     the worksheet's name box (id "name", drawn by \\WorksheetHeader).
     Returns the composited worksheet as a BGR numpy array.
     """
-    from graderbot import extract_answer_boxes, render_pdf_page_image
+    from graderbot.core import extract_answer_boxes, render_pdf_page_image
 
     cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
     blank_worksheet = latexmk_worksheet(tex_fn, cv_mode=False)

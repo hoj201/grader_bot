@@ -17,9 +17,9 @@ from typing import Dict, Tuple, Union
 import cv2
 import numpy as np
 
-from graderbot import Box, QuestionResult, box_pixel_rect
-from storage import image_to_pdf
-from worksheet_synth import _DEFAULT_FONT, _DEFAULT_TEXT_SIZE, _draw_answer
+from graderbot.core import Box, QuestionResult, box_pixel_rect
+from graderbot.storage import image_to_pdf
+from graderbot.worksheet_synth import _DEFAULT_FONT, _DEFAULT_TEXT_SIZE, _draw_answer
 
 # Colors are in RGB order (the renderer works on RGB arrays).
 _CORRECT_COLOR = (0, 150, 0)

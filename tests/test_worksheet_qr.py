@@ -6,16 +6,16 @@ import cv2
 import numpy as np
 import pytest
 
-from graderbot import read_worksheet_id, render_pdf_page_image
-from worksheet_qr import (
+from graderbot.core import read_worksheet_id, render_pdf_page_image
+from graderbot.worksheet_qr import (
     decode_worksheet_id,
     generate_worksheet_id,
     render_qr_png,
 )
-from worksheet_synth import latexmk_worksheet
-from worksheetbot import fill_template
+from graderbot.worksheet_synth import latexmk_worksheet
+from graderbot.worksheetbot import fill_template
 
-TEMPLATE_TEX = Path(__file__).parent.parent / "worksheet_template.tex"
+TEMPLATE_TEX = Path(__file__).parent.parent / "tex" / "worksheet_template.tex"
 
 
 def test_generate_worksheet_id_is_short_and_alphanumeric():

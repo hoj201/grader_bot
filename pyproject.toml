@@ -23,6 +23,11 @@ qrcode = "^8.0"
 pytest = "^8.0.0"
 moto = {extras = ["s3"], version = "^5.0.0"}
 
+[tool.pytest.ini_options]
+# The app modules live in the top-level `graderbot` package; add the repo root
+# to sys.path so `import graderbot` resolves without an install step.
+pythonpath = ["."]
+
 
 [build-system]
 requires = ["poetry-core"]

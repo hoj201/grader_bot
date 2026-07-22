@@ -2,9 +2,9 @@ import numpy as np
 import pymupdf
 import pytest
 
-import markup
-from graderbot import Box, QuestionResult
-from markup import _CORRECT_COLOR, _WRONG_COLOR, render_marked_page, save_marked_pdf
+from graderbot import markup
+from graderbot.core import Box, QuestionResult
+from graderbot.markup import _CORRECT_COLOR, _WRONG_COLOR, render_marked_page, save_marked_pdf
 
 
 @pytest.fixture

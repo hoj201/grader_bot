@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple, Union
 import cv2
 import numpy as np
 
-from graderbot import (
+from graderbot.core import (
     Box,
     QuestionResult,
     extract_name,
@@ -32,8 +32,8 @@ from graderbot import (
     read_worksheet_id,
     rectify_to_canonical,
 )
-from markup import render_marked_page
-from storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
+from graderbot.markup import render_marked_page
+from graderbot.storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
 
 _NAME_BOX_ID = "name"
 

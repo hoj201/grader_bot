@@ -8,8 +8,8 @@ import pymupdf
 import pytest
 from moto import mock_aws
 
-from graderbot import Box
-from storage import (
+from graderbot.core import Box
+from graderbot.storage import (
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
@@ -29,8 +29,8 @@ from storage import (
     store_worksheet,
     upload_to_s3,
 )
-from worksheet_synth import WORKSHEET_STY_PATH
-from worksheetbot import Question
+from graderbot.worksheet_synth import WORKSHEET_STY_PATH
+from graderbot.worksheetbot import Question
 
 
 def _sample_record(**overrides) -> WorksheetRecord:
@@ -398,8 +398,8 @@ def test_generate_answer_key_pdf_fills_worksheet_and_converts_to_pdf(tmp_path):
     fake_image = np.zeros((10, 10, 3), dtype=np.uint8)
     out_path = tmp_path / "answers.pdf"
 
-    with patch("storage.fill_worksheet", return_value=fake_image) as mock_fill, \
-         patch("storage.image_to_pdf", return_value=out_path) as mock_convert:
+    with patch("graderbot.storage.fill_worksheet", return_value=fake_image) as mock_fill, \
+         patch("graderbot.storage.image_to_pdf", return_value=out_path) as mock_convert:
         result = generate_answer_key_pdf("demo.tex", {"1": "2"}, out_path)
 
     mock_fill.assert_called_once_with("demo.tex", {"1": "2"})
@@ -426,10 +426,10 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
 
     sample_boxes = {"1": Box(0.1, 0.2, 0.3, 0.1), "name": Box(0.1, 0.9, 0.4, 0.05)}
 
-    with patch("storage.latexmk_worksheet", side_effect=fake_latexmk) as mock_latexmk, \
-         patch("storage.generate_answer_key_pdf", return_value=answers_pdf) as mock_answer_key, \
-         patch("storage.extract_answer_boxes", return_value=sample_boxes) as mock_boxes, \
-         patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}") as mock_upload:
+    with patch("graderbot.storage.latexmk_worksheet", side_effect=fake_latexmk) as mock_latexmk, \
+         patch("graderbot.storage.generate_answer_key_pdf", return_value=answers_pdf) as mock_answer_key, \
+         patch("graderbot.storage.extract_answer_boxes", return_value=sample_boxes) as mock_boxes, \
+         patch("graderbot.storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}") as mock_upload:
         record = store_worksheet(
             tex_path=tex_path,
             questions=questions,
@@ -481,10 +481,10 @@ def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):
     def fake_latexmk(tex_filename, cv_mode):
         return str(cv_pdf if cv_mode else student_pdf)
 
-    with patch("storage.latexmk_worksheet", side_effect=fake_latexmk), \
-         patch("storage.generate_answer_key_pdf", return_value=answers_pdf), \
-         patch("storage.extract_answer_boxes", return_value={"1": Box(0.1, 0.2, 0.3, 0.1)}), \
-         patch("storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
+    with patch("graderbot.storage.latexmk_worksheet", side_effect=fake_latexmk), \
+         patch("graderbot.storage.generate_answer_key_pdf", return_value=answers_pdf), \
+         patch("graderbot.storage.extract_answer_boxes", return_value={"1": Box(0.1, 0.2, 0.3, 0.1)}), \
+         patch("graderbot.storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
         record = store_worksheet(
             tex_path=tex_path,
             questions=questions,

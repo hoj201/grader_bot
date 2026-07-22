@@ -14,7 +14,7 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 
-from worksheet_qr import decode_worksheet_id
+from graderbot.worksheet_qr import decode_worksheet_id
 
 load_dotenv()
 
@@ -237,7 +237,7 @@ def _mathpix_ocr(image: np.ndarray) -> str:
 
     # Log the exact bytes posted plus the raw response for a future OCR
     # training set (issue #1). Self-gates on env config and is non-fatal.
-    from mathpix_log import log_mathpix_call
+    from graderbot.mathpix_log import log_mathpix_call
 
     log_mathpix_call(encoded.tobytes(), raw, text)
 

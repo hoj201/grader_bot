@@ -4,10 +4,10 @@ import numpy as np
 import pymupdf
 import pytest
 
-import scan_grader
-from graderbot import Box, QuestionResult
-from scan_grader import grade_scans, mark_scan, results_by_student
-from storage import init_db, insert_worksheet, serialize_boxes
+from graderbot import scan_grader
+from graderbot.core import Box, QuestionResult
+from graderbot.scan_grader import grade_scans, mark_scan, results_by_student
+from graderbot.storage import init_db, insert_worksheet, serialize_boxes
 from tests.test_storage import _sample_record
 
 

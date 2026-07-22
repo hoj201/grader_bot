@@ -1,7 +1,7 @@
 """Streamlit frontend for browsing and creating GraderBot worksheets.
 
 Run with:
-  streamlit run app.py
+  streamlit run graderbot/app.py
 
 Requires ANTHROPIC_API_KEY, S3_BUCKET, and AWS credentials in the
 environment (see README.md).
@@ -17,13 +17,16 @@ import anthropic
 import streamlit as st
 from dotenv import load_dotenv
 
-import storage
-from scan_grader import mark_scan, results_by_student
-from worksheetbot import AVAILABLE_MODELS, CompileError, generate_worksheet
+from graderbot import storage
+from graderbot.scan_grader import mark_scan, results_by_student
+from graderbot.worksheetbot import AVAILABLE_MODELS, CompileError, generate_worksheet
 
 load_dotenv()
 
-TEMPLATE_PATH = Path(os.environ.get("WORKSHEET_TEMPLATE", "worksheet_template.tex"))
+_TEX_DIR = Path(__file__).resolve().parent.parent / "tex"
+TEMPLATE_PATH = Path(
+    os.environ.get("WORKSHEET_TEMPLATE", str(_TEX_DIR / "worksheet_template.tex"))
+)
 DB_PATH = Path(os.environ.get("WORKSHEETS_DB_PATH", "worksheets.sqlite3"))
 BUCKET = os.environ.get("S3_BUCKET")
 

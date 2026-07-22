@@ -4,8 +4,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from mathpix_log import log_mathpix_call
-from storage import init_db
+from graderbot.mathpix_log import log_mathpix_call
+from graderbot.storage import init_db
 
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n-fake-png-bytes"
 _RESPONSE = {"text": "$12$", "confidence": 0.99, "request_id": "abc"}

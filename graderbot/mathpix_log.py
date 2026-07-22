@@ -45,7 +45,7 @@ def log_mathpix_call(
         return None
 
     try:
-        import storage
+        from graderbot import storage
 
         image_sha256 = hashlib.sha256(image_png_bytes).hexdigest()
         key = f"mathpix/{image_sha256}.png"

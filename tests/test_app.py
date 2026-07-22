@@ -2,9 +2,9 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-import storage
+from graderbot import storage
 
-APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
+APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
 
 
 def _seed_worksheet(db_path, title=None):

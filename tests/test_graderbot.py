@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot import (
+from graderbot.core import (
     Box,
     QuestionResult,
     _canonical_marker_centers,
@@ -24,9 +24,9 @@ from graderbot import (
     read_box,
     rectify_to_canonical,
 )
-from worksheet_synth import fill_worksheet
+from graderbot.worksheet_synth import fill_worksheet
 
-DEMO_TEX = Path(__file__).parent.parent / "demo.tex"
+DEMO_TEX = Path(__file__).parent.parent / "tex" / "demo.tex"
 
 _ARUCO_DICTIONARY = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
 _MARKER_IDS = (0, 1, 2, 3)  # top-left, top-right, bottom-left, bottom-right
@@ -229,7 +229,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
         qid = next(qid for qid, b in boxes.items() if b is box)
         return responses[qid]
 
-    monkeypatch.setattr("graderbot.read_box", fake_read_box)
+    monkeypatch.setattr("graderbot.core.read_box", fake_read_box)
 
     results = grade_hw(answer_key, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
@@ -241,7 +241,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
 
 def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05)}
-    monkeypatch.setattr("graderbot.read_box", lambda image, box: "")
+    monkeypatch.setattr("graderbot.core.read_box", lambda image, box: "")
 
     results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
