@@ -36,8 +36,11 @@
 % Internal answer box
 %============================================================
 
+% The box spans (0,0)--(width,height); baseline is set so the box is
+% vertically centred on the text's math axis (~0.5ex above the baseline)
+% rather than floating up with its bottom near the middle of the text.
 \newcommand{\questions@AnswerBox}[1]{%
-\tikz[baseline=-0.6ex]{
+\tikz[baseline={\dimexpr\questions@answerheight/2-0.5ex\relax}]{
 
     \ifworksheet@cvmode
 
