@@ -4,7 +4,10 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot.worksheet_boxes import extract_answer_boxes
+from graderbot.worksheet_boxes import (
+    extract_answer_boxes,
+    extract_answer_boxes_by_page,
+)
 from graderbot.worksheet_synth import (
     add_image_noise,
     fill_worksheet,
@@ -135,14 +138,14 @@ def boxes():
 def test_fill_worksheet_draws_plain_answer_into_its_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
 
-    filled_region = _box_region(filled, boxes["add001"])
+    filled_region = _box_region(filled[0], boxes["add001"])
     assert not np.all(filled_region == 255)
 
 
 def test_fill_worksheet_draws_fraction_into_its_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {"sub001": r"\frac{3}{5}"})
 
-    filled_region = _box_region(filled, boxes["sub001"])
+    filled_region = _box_region(filled[0], boxes["sub001"])
     assert not np.all(filled_region == 255)
 
 
@@ -150,8 +153,16 @@ def test_fill_worksheet_draws_student_name_into_name_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
 
     assert "name" in boxes
-    filled_region = _box_region(filled, boxes["name"])
+    filled_region = _box_region(filled[0], boxes["name"])
     assert not np.all(filled_region == 255)
+
+
+def test_fill_worksheet_returns_one_image_per_page():
+    """demo.tex is a single page, so fill_worksheet returns a one-element list."""
+    filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
+
+    assert isinstance(filled, list)
+    assert len(filled) == 1
 
 
 def test_fill_worksheet_raises_on_unknown_question_id():
@@ -160,3 +171,61 @@ def test_fill_worksheet_raises_on_unknown_question_id():
     except KeyError:
         return
     raise AssertionError("Expected KeyError for unknown question id")
+
+
+# A worksheet with enough questions to spill onto a second page. Regression
+# fixture for issue #31: answers used to be stamped at their relative position
+# on page 1 regardless of which page the box was actually on.
+_MULTIPAGE_TEX = r"""\documentclass{article}
+\usepackage{gbworksheet}
+\usepackage{questions}
+\QuestionSetup{answer width=1.5in, answer height=0.4in, cv color=red}
+\begin{document}
+\WorksheetHeader
+\begin{enumerate}
+""" + "\n".join(
+    rf"    \item \Question{{{i}}}{{Question $ {i} $?}}" for i in range(1, 31)
+) + r"""
+\end{enumerate}
+\end{document}
+"""
+
+
+@pytest.fixture(scope="module")
+def multipage_tex(tmp_path_factory):
+    tex_path = tmp_path_factory.mktemp("multipage") / "multipage.tex"
+    tex_path.write_text(_MULTIPAGE_TEX)
+    return tex_path
+
+
+def test_fill_worksheet_spans_multiple_pages(multipage_tex):
+    filled = fill_worksheet(str(multipage_tex), {})
+
+    assert len(filled) >= 2
+
+
+def test_fill_worksheet_stamps_answers_on_their_own_page(multipage_tex):
+    """Every answer must land inside its box on the page that box lives on --
+    not at the same relative spot on page 1 (issue #31)."""
+    cv_worksheet = latexmk_worksheet(str(multipage_tex), cv_mode=True)
+    boxes_by_page = extract_answer_boxes_by_page(cv_worksheet)
+
+    answers = {str(i): str(i) for i in range(1, 31)}
+    filled = fill_worksheet(str(multipage_tex), answers)
+
+    assert len(filled) == len(boxes_by_page)
+
+    # At least one question box must actually live on a page other than the
+    # first, otherwise this test is not exercising the multi-page path.
+    assert any(
+        qid.isdigit()
+        for page_boxes in boxes_by_page[1:]
+        for qid in page_boxes
+    )
+
+    for page_image, page_boxes in zip(filled, boxes_by_page):
+        for qid in page_boxes:
+            if not qid.isdigit():
+                continue
+            region = _box_region(page_image, page_boxes[qid])
+            assert not np.all(region == 255), f"answer {qid} not stamped in its box"

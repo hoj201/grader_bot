@@ -316,8 +316,8 @@ def image_to_pdf(image: np.ndarray, out_path: Path) -> Path:
 
 
 def generate_answer_key_pdf(tex_fn: str, answers: Dict[str, str], out_path: Path) -> Path:
-    image = fill_worksheet(tex_fn, answers)
-    return image_to_pdf(image, out_path)
+    images = fill_worksheet(tex_fn, answers)
+    return images_to_pdf(images, out_path)
 
 
 # --------------------------------------------------------------------------

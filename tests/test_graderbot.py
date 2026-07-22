@@ -22,7 +22,10 @@ from graderbot.registration import (
     align_document_image,
     rectify_to_canonical,
 )
-from graderbot.worksheet_boxes import extract_answer_boxes
+from graderbot.worksheet_boxes import (
+    extract_answer_boxes,
+    extract_answer_boxes_by_page,
+)
 from graderbot.worksheet_synth import fill_worksheet
 
 DEMO_TEX = Path(__file__).parent.parent / "tex" / "demo.tex"
@@ -131,6 +134,16 @@ def test_extract_answer_boxes_sub001_is_below_add001(boxes):
     assert boxes["sub001"].y_lower_left < boxes["add001"].y_lower_left
 
 
+def test_extract_answer_boxes_by_page_single_page_demo(demo_pdf):
+    """demo.tex is one page, so the per-page result is a one-element list whose
+    only dict matches the flat `extract_answer_boxes` mapping."""
+    pages = extract_answer_boxes_by_page(str(demo_pdf))
+
+    assert len(pages) == 1
+    assert set(pages[0]) == {"name", "add001", "sub001", "frac001"}
+    assert pages[0] == extract_answer_boxes(str(demo_pdf))
+
+
 def test_load_pdf_pages_rgb_returns_every_page(tmp_path):
     from PIL import Image
 
@@ -171,7 +184,7 @@ def test_read_box_reads_handwritten_answers(boxes):
     # (extracted from a fresh compile) directly to this image with no marker
     # alignment, so a checked-in PDF silently drifts out of sync whenever the
     # layout changes. See the sibling fraction test for the same pattern.
-    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"add001": "12", "sub001": "11"})
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"add001": "12", "sub001": "11"})[0]
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
     assert read_box(filled_image, boxes["add001"]) == "12"
@@ -184,7 +197,7 @@ def test_read_box_reads_a_handwritten_fraction(boxes):
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
 
-    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})[0]
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
     assert read_box(filled_image, boxes["frac001"]) == r"\frac{3}{4}"
@@ -196,7 +209,7 @@ def test_extract_name_matches_closest_roster_name(boxes):
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
 
-    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
+    filled_image_bgr = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")[0]
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
     roster = ["Jane Doe", "John Smith", "Alice Johnson", "Bob Lee", "Nancy Drew"]

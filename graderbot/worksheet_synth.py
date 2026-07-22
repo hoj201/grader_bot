@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -216,33 +216,46 @@ def fill_worksheet(
     student_name: str = None,
     font: str = _DEFAULT_FONT,
     text_size: int = _DEFAULT_TEXT_SIZE,
-) -> np.ndarray:
+) -> List[np.ndarray]:
     """Renders the blank version of `tex_fn` and writes `answers` (a
     dictionary mapping question ids to short LaTeX snippets, either a
     plain number or a `\\frac{a}{b}`) into their corresponding answer
     boxes, using the CV-mode render of the same worksheet to locate
     those boxes. If `student_name` is given, it is also written into
     the worksheet's name box (id "name", drawn by \\WorksheetHeader).
-    Returns the composited worksheet as a BGR numpy array.
+
+    Returns one composited BGR numpy array per PDF page (in page order),
+    so a worksheet that spills onto multiple pages is filled correctly:
+    each answer is stamped onto the page it actually lives on rather than
+    at the same relative position on page 1.
     """
     from graderbot.imaging import render_pdf_page_image
-    from graderbot.worksheet_boxes import extract_answer_boxes
+    from graderbot.worksheet_boxes import extract_answer_boxes_by_page
 
     cv_worksheet = latexmk_worksheet(tex_fn, cv_mode=True)
     blank_worksheet = latexmk_worksheet(tex_fn, cv_mode=False)
-    boxes = extract_answer_boxes(cv_worksheet)
-
-    rgb_image = render_pdf_page_image(blank_worksheet)
-    image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+    boxes_by_page = extract_answer_boxes_by_page(cv_worksheet)
 
     entries = dict(answers)
     if student_name is not None:
         entries["name"] = student_name
 
-    for qid, answer in entries.items():
-        if qid not in boxes:
+    known_ids = set().union(*boxes_by_page) if boxes_by_page else set()
+    for qid in entries:
+        if qid not in known_ids:
             raise KeyError(f"No answer box found for question id {qid!r}")
-        box_px = _box_to_pixels(boxes[qid], image.shape[1], image.shape[0])
-        image = _draw_answer(image, box_px, answer, font, text_size)
 
-    return image
+    pages: List[np.ndarray] = []
+    for page_index, page_boxes in enumerate(boxes_by_page):
+        rgb_image = render_pdf_page_image(blank_worksheet, page_index=page_index)
+        image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+
+        for qid, box in page_boxes.items():
+            if qid not in entries:
+                continue
+            box_px = _box_to_pixels(box, image.shape[1], image.shape[0])
+            image = _draw_answer(image, box_px, entries[qid], font, text_size)
+
+        pages.append(image)
+
+    return pages

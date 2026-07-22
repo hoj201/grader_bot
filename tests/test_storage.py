@@ -397,16 +397,33 @@ def test_images_to_pdf_rejects_empty_list(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_generate_answer_key_pdf_fills_worksheet_and_converts_to_pdf(tmp_path):
-    fake_image = np.zeros((10, 10, 3), dtype=np.uint8)
+    fake_images = [np.zeros((10, 10, 3), dtype=np.uint8)]
     out_path = tmp_path / "answers.pdf"
 
-    with patch("graderbot.storage.fill_worksheet", return_value=fake_image) as mock_fill, \
-         patch("graderbot.storage.image_to_pdf", return_value=out_path) as mock_convert:
+    with patch("graderbot.storage.fill_worksheet", return_value=fake_images) as mock_fill, \
+         patch("graderbot.storage.images_to_pdf", return_value=out_path) as mock_convert:
         result = generate_answer_key_pdf("demo.tex", {"1": "2"}, out_path)
 
     mock_fill.assert_called_once_with("demo.tex", {"1": "2"})
-    mock_convert.assert_called_once_with(fake_image, out_path)
+    mock_convert.assert_called_once_with(fake_images, out_path)
     assert result == out_path
+
+
+def test_generate_answer_key_pdf_passes_every_page_through(tmp_path):
+    """A multi-page worksheet must produce a multi-page answer key: every image
+    fill_worksheet returns is forwarded to images_to_pdf in order."""
+    fake_images = [
+        np.zeros((10, 10, 3), dtype=np.uint8),
+        np.full((10, 10, 3), 255, dtype=np.uint8),
+    ]
+    out_path = tmp_path / "answers.pdf"
+
+    with patch("graderbot.storage.fill_worksheet", return_value=fake_images), \
+         patch("graderbot.storage.images_to_pdf", return_value=out_path) as mock_convert:
+        generate_answer_key_pdf("demo.tex", {"1": "2"}, out_path)
+
+    (passed_images, _), _ = mock_convert.call_args
+    assert passed_images is fake_images
 
 
 # --------------------------------------------------------------------------

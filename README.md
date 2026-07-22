@@ -31,8 +31,10 @@ import cv2
 from graderbot.worksheet_synth import fill_worksheet, perspective_skew_image, add_image_noise
 import numpy as np
 
-filled = fill_worksheet('tex/demo.tex', {'add001': '12', 'sub001': r'\frac{3}{5}'})
-skewed = perspective_skew_image(filled, max_skew=0.02, rng=np.random.default_rng(42))
+# fill_worksheet returns one BGR image per page (a worksheet may span
+# several pages), so index/iterate the list.
+pages = fill_worksheet('tex/demo.tex', {'add001': '12', 'sub001': r'\frac{3}{5}'})
+skewed = perspective_skew_image(pages[0], max_skew=0.02, rng=np.random.default_rng(42))
 noisy = add_image_noise(skewed, noise_level=0.05, rng=np.random.default_rng(7))
 cv2.imwrite('output_filename.png', noisy)
 ```
