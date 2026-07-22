@@ -397,7 +397,44 @@ def generate_worksheet(
     not given.
     """
     questions = generate_questions(client, prompt, num_questions, model=model, on_step=on_step)
+    return build_worksheet(
+        questions,
+        template_path,
+        out,
+        max_repairs,
+        client=client,
+        bucket=bucket,
+        db_path=db_path,
+        prompt=prompt,
+        title=title,
+        model=model,
+        on_step=on_step,
+    )
 
+
+def build_worksheet(
+    questions: "list[Question]",
+    template_path: Path,
+    out: Path,
+    max_repairs: int,
+    client: Optional[anthropic.Anthropic] = None,
+    bucket: str = None,
+    db_path: Path = Path("worksheets.sqlite3"),
+    prompt: str = "",
+    title: Optional[str] = None,
+    model: str = MODEL,
+    on_step: OnStep = _print_step,
+) -> tuple[Path, list, "storage.WorksheetRecord"]:
+    """Runs the questions -> LaTeX -> compile (with repair retries) ->
+    optional S3/DB storage tail of the pipeline on a ready `list[Question]`.
+
+    Shared by the AI path (`generate_worksheet`) and the manual path
+    (`create_worksheet_from_questions`). The compile/repair loop only asks the
+    model to repair when `client` is given and `max_repairs > 0`; with
+    `max_repairs=0` it compiles exactly once and raises `CompileError` on
+    failure without touching `client`. Returns (tex_path, questions, record),
+    where `record` is None if `bucket` is not given.
+    """
     public_id = generate_worksheet_id()
     questions_tex = render_questions(questions)
     tex_source = fill_template(template_path, questions_tex, worksheet_id=public_id)
@@ -444,6 +481,69 @@ def generate_worksheet(
         on_step("Compile failed, asking model to repair...", log_tail)
         tex_source = repair_tex(client, tex_source, log_tail, model=model)
         tex_path.write_text(tex_source)
+
+
+# --------------------------------------------------------------------------
+# Manual entry: build a worksheet from a user-supplied questions JSON
+# --------------------------------------------------------------------------
+
+def parse_questions_json(raw: str) -> "list[Question]":
+    """Parses a user-supplied JSON array of questions into `Question`s.
+
+    Accepts the same shape `generate_questions` produces —
+    `[{"id": ..., "text": ..., "answer": ...}]` — and reuses `_parse_json_array`
+    so pasted JSON gets the same markdown-fence stripping and stray-LaTeX-
+    backslash tolerance. Raises `ValueError` with a human-readable message if
+    the payload isn't a non-empty array of objects each carrying id/text/answer.
+    """
+    try:
+        data = _parse_json_array(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Questions must be valid JSON: {e}") from e
+
+    if not isinstance(data, list) or not data:
+        raise ValueError("Questions JSON must be a non-empty array of objects.")
+
+    questions = []
+    for i, q in enumerate(data):
+        if not isinstance(q, dict) or not {"id", "text", "answer"} <= q.keys():
+            raise ValueError(
+                f"Question at index {i} must be an object with "
+                f'"id", "text", and "answer" keys.'
+            )
+        questions.append(Question(id=str(q["id"]), text=q["text"], answer=q["answer"]))
+    return questions
+
+
+def create_worksheet_from_questions(
+    questions_json: str,
+    template_path: Path,
+    out: Path,
+    title: str,
+    bucket: str = None,
+    db_path: Path = Path("worksheets.sqlite3"),
+    on_step: OnStep = _print_step,
+) -> tuple[Path, list, "storage.WorksheetRecord"]:
+    """Manual worksheet-creation entry point (issue #12): builds a worksheet
+    from a user-supplied questions JSON string instead of generating questions
+    with the LLM. Compiles exactly once (no AI repair loop) and stores the
+    result like the AI path. Raises `ValueError` on bad JSON and `CompileError`
+    if the LaTeX doesn't compile. The stored `model` is the literal "manual".
+    """
+    questions = parse_questions_json(questions_json)
+    return build_worksheet(
+        questions,
+        template_path,
+        out,
+        max_repairs=0,
+        client=None,
+        bucket=bucket,
+        db_path=db_path,
+        prompt="",
+        title=title,
+        model="manual",
+        on_step=on_step,
+    )
 
 
 def main():

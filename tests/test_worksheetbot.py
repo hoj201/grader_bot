@@ -11,11 +11,13 @@ from graderbot.worksheetbot import (
     CompileError,
     Question,
     choose_grid_columns,
+    create_worksheet_from_questions,
     escape_latex,
     estimate_question_width,
     generate_questions,
     generate_title,
     generate_worksheet,
+    parse_questions_json,
     render_questions,
     repair_tex,
 )
@@ -440,3 +442,106 @@ def test_generate_worksheet_raises_compile_error_after_max_repairs(tmp_path):
 
     assert exc_info.value.log_tail == "persistent failure"
     assert mock_repair.call_count == 1
+
+
+# --------------------------------------------------------------------------
+# Manual entry: parse_questions_json / create_worksheet_from_questions
+# --------------------------------------------------------------------------
+
+def test_parse_questions_json_parses_plain_array():
+    raw = json.dumps(
+        [
+            {"id": "1", "text": "2 + 2 = ?", "answer": "4"},
+            {"id": "2", "text": "3 * 3 = ?", "answer": "9"},
+        ]
+    )
+
+    assert parse_questions_json(raw) == [
+        Question(id="1", text="2 + 2 = ?", answer="4"),
+        Question(id="2", text="3 * 3 = ?", answer="9"),
+    ]
+
+
+def test_parse_questions_json_coerces_non_string_id():
+    raw = json.dumps([{"id": 7, "text": "q", "answer": "a"}])
+
+    assert parse_questions_json(raw) == [Question(id="7", text="q", answer="a")]
+
+
+def test_parse_questions_json_tolerates_unescaped_latex_backslashes():
+    # A human pasting LaTeX into JSON hits the same single-backslash pitfall as
+    # the LLM; _parse_json_array's repair path should recover it.
+    raw = r'[{"id": "1", "text": "$8 \div 4 = ?$", "answer": "2"}]'
+
+    assert parse_questions_json(raw) == [Question(id="1", text=r"$8 \div 4 = ?$", answer="2")]
+
+
+def test_parse_questions_json_strips_markdown_fences():
+    raw = "```json\n" + json.dumps([{"id": "1", "text": "q", "answer": "a"}]) + "\n```"
+
+    assert parse_questions_json(raw) == [Question(id="1", text="q", answer="a")]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[]",  # empty array
+        json.dumps({"id": "1", "text": "q", "answer": "a"}),  # object, not array
+        json.dumps([{"id": "1", "text": "q"}]),  # missing "answer"
+        json.dumps(["not an object"]),  # array item is not an object
+    ],
+)
+def test_parse_questions_json_rejects_invalid_payloads(raw):
+    with pytest.raises(ValueError):
+        parse_questions_json(raw)
+
+
+def test_create_worksheet_from_questions_stores_with_manual_model(tmp_path):
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    db_path = tmp_path / "worksheets.sqlite3"
+    raw = json.dumps([{"id": "1", "text": "$2+2=$", "answer": "4"}])
+    fake_record = SimpleNamespace(
+        id=1,
+        student_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/student.pdf",
+        cv_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/cv.pdf",
+        answers_pdf_s3url="https://my-bucket.s3.amazonaws.com/worksheet/answers.pdf",
+    )
+
+    with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")), patch(
+        "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
+    ) as mock_store:
+        tex_path, questions, record = create_worksheet_from_questions(
+            raw, template_path, out, title="My Sheet", bucket="my-bucket", db_path=db_path
+        )
+
+    assert tex_path == out.with_suffix(".tex")
+    assert tex_path.exists()
+    assert "%%QUESTIONS%%" not in tex_path.read_text()
+    assert questions == [Question(id="1", text="$2+2=$", answer="4")]
+    assert record is fake_record
+    mock_store.assert_called_once_with(
+        tex_path=tex_path,
+        questions=questions,
+        prompt="",
+        model="manual",
+        bucket="my-bucket",
+        db_path=db_path,
+        title="My Sheet",
+        public_id=ANY,
+    )
+
+
+def test_create_worksheet_from_questions_does_not_repair_on_compile_failure(tmp_path):
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    raw = json.dumps([{"id": "1", "text": "$2+2=$", "answer": "4"}])
+
+    with patch(
+        "graderbot.worksheetbot.compile_tex", return_value=(False, "bad latex")
+    ), patch("graderbot.worksheetbot.repair_tex") as mock_repair:
+        with pytest.raises(CompileError) as exc_info:
+            create_worksheet_from_questions(raw, template_path, out, title="My Sheet")
+
+    assert exc_info.value.log_tail == "bad latex"
+    mock_repair.assert_not_called()

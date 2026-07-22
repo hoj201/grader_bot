@@ -139,6 +139,21 @@ def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatc
     assert model_selects[0].value == "claude-haiku-4-5"
 
 
+def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    text_area_labels = [ta.label for ta in at.text_area]
+    assert "Questions JSON" in text_area_labels
+    button_labels = [b.label for b in at.button]
+    assert "Create from JSON" in button_labels
+
+
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
