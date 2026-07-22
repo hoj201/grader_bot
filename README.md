@@ -48,6 +48,16 @@ The [worksheetbot](./graderbot/worksheetbot.py) pipeline can upload the generate
 configured, the worksheet is still compiled but nothing is uploaded or
 stored.
 
+### System dependencies
+Beyond the Python packages (managed with poetry), grading and worksheet
+compilation shell out to native binaries that must be on your `PATH`:
+- **Tesseract** — `pytesseract` (used by [graderbot/ocr.py](./graderbot/ocr.py)
+  to read the student-name box) is only a wrapper around the `tesseract`
+  binary. Install it with `brew install tesseract` on macOS or
+  `apt-get install tesseract-ocr` on Debian/Ubuntu. The `Dockerfile` installs
+  it for the deployed image.
+- **TeX Live / latexmk** — for compiling the worksheet templates (see above).
+
 ### One-time setup
 1. Create an S3 bucket for PDF + database backups.
 2. Create an IAM user/role with an S3 policy scoped to that bucket. This

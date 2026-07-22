@@ -3,6 +3,8 @@ FROM python:3.13-slim
 # TeX Live packages needed to compile tex/worksheet_template.tex (geometry,
 # graphicx, tikz, tikzpagenodes, xcolor, calc) via latexmk. Deliberately
 # scoped rather than texlive-full to keep the image size manageable.
+# tesseract-ocr provides the native binary that pytesseract shells out to when
+# OCRing the student-name box during grading (see graderbot/ocr.py).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         texlive-latex-base \
         texlive-latex-recommended \
@@ -10,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         texlive-pictures \
         texlive-fonts-recommended \
         latexmk \
+        tesseract-ocr \
         curl \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
