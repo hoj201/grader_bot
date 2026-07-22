@@ -1,0 +1,32 @@
+\documentclass{article}
+
+% Name-collection worksheet (issue #41): a sheet for gathering labelled
+% handwriting samples to train a student-name classifier. graderbot prints a
+% target name in the exemplar box at the top (via the %%STUDENT_NAME%%
+% placeholder); the student copies it into every box of the grid below, so each
+% grid box becomes one training sample whose label is the printed name.
+%
+% Fill the placeholders before compiling:
+%   %%WORKSHEET_ID%%   -> \WorksheetSetup{worksheet id=<id>} (or empty)
+%   %%STUDENT_NAME%%   -> the target name, e.g. Jane Doe
+%
+% Compile in cv mode (red, extractable grid boxes) or blank mode (plain boxes
+% for the student), the same as the other worksheets:
+%   latexmk -pdf -usepretex='\def\WSCVMode{1}' name_collection_template.tex
+
+\usepackage{gbworksheet}
+
+\WorksheetSetup{
+    student name={%%STUDENT_NAME%%},
+    name grid rows=9,
+}
+
+\begin{document}
+
+%%WORKSHEET_ID%%
+
+\WorksheetNameHeader
+
+\WorksheetNameGrid
+
+\end{document}

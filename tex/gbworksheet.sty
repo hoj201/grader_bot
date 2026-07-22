@@ -62,6 +62,23 @@
 \def\worksheet@namecvlinewidth{2pt}
 \def\worksheet@namelinewidth{0.5pt}
 
+% Name-collection worksheet (issue #41). The printed target name graderbot
+% fills into the exemplar box; empty by default so the template still compiles
+% without one. The grid geometry is stored as bare numbers (inches) because the
+% grid is laid out with pgfmath arithmetic in \WorksheetNameGrid.
+%
+% The collection boxes MUST be the same size as the header/exemplar name box
+% (\worksheet@nameboxwidth x \worksheet@nameboxheight = 3.75in x 0.6in) so the
+% handwriting samples match the box a student fills on a real worksheet -- a
+% wider box changes how a name is spaced and sized. That full width leaves no
+% room for a second column across the text block, so the grid is a single
+% column.
+\def\worksheet@studentname{}
+\def\worksheet@ngboxwidth{3.75}   % collection box width  (inches, numeric)
+\def\worksheet@ngboxheight{0.6}   % collection box height (inches, numeric)
+\def\worksheet@ngvgap{0.22}       % vertical gap between rows
+\def\worksheet@ngrows{9}          % number of boxes (one column)
+
 \newif\ifworksheet@frame
 \worksheet@framefalse
 
@@ -90,6 +107,11 @@
     name box width/.store in=\worksheet@nameboxwidth,
     name box height/.store in=\worksheet@nameboxheight,
     name cv color/.store in=\worksheet@namecvcolor,
+    student name/.store in=\worksheet@studentname,
+    name grid rows/.store in=\worksheet@ngrows,
+    name grid box width/.store in=\worksheet@ngboxwidth,
+    name grid box height/.store in=\worksheet@ngboxheight,
+    name grid vgap/.store in=\worksheet@ngvgap,
 }
 
 % Allow overriding cv mode from the command line, e.g.
@@ -245,6 +267,84 @@
 \textbf{Name:} & \textbf{Date:}\\
 \worksheet@NameBox & \hrulefill
 \end{tabular*}
+
+\vspace{0.25in}
+}
+
+% ============================================================
+% Name-collection worksheet (issue #41)
+% ============================================================
+%
+% A sheet for gathering labelled handwriting samples to train a name
+% classifier. graderbot prints a target name in the exemplar box at the top;
+% the student copies it into a grid of blank boxes below, so every grid box
+% becomes one training sample whose label is the printed name.
+%
+% The exemplar box keeps a plain black border in BOTH modes so
+% extract_answer_boxes (which keys on red rectangles) never mistakes the
+% printed name for a sample to crop. The grid boxes reuse the cv-mode
+% convention -- red border plus a tiny id label INSIDE the rectangle -- because
+% extract_answer_boxes skips any red box that contains no text (the id).
+
+% One collection box. #1,#2 are the top-left corner (bare numbers, inches);
+% #3 is the box id. In cv mode: red border + tiny in-box id label so the box is
+% discoverable by extract_answer_boxes. In blank mode: a plain box to write in.
+\newcommand{\worksheet@CollectBox}[3]{%
+    \pgfmathsetmacro{\worksheet@cbxr}{#1+\worksheet@ngboxwidth}%
+    \pgfmathsetmacro{\worksheet@cbyb}{#2-\worksheet@ngboxheight}%
+    \ifworksheet@cvmode
+        \draw[
+            draw=\worksheet@namecvcolor,
+            line width=\worksheet@namecvlinewidth
+        ]
+        (#1in,#2in) rectangle (\worksheet@cbxr in,\worksheet@cbyb in);
+        \node[
+            font=\tiny,
+            text=\worksheet@namecvcolor,
+            anchor=south west,
+            inner sep=1pt
+        ] at (#1in,\worksheet@cbyb in) {#3};
+    \else
+        \draw[line width=\worksheet@namelinewidth]
+        (#1in,#2in) rectangle (\worksheet@cbxr in,\worksheet@cbyb in);
+    \fi
+}
+
+% The single column of blank name boxes, each the same size as the header/
+% exemplar name box. Boxes are numbered name1, name2, ... top-to-bottom.
+\newcommand{\WorksheetNameGrid}{%
+\begin{center}
+\begin{tikzpicture}
+    \foreach \worksheet@r in {1,...,\worksheet@ngrows}{%
+        \pgfmathsetmacro{\worksheet@gy}{-(\worksheet@r-1)*(\worksheet@ngboxheight+\worksheet@ngvgap)}%
+        \worksheet@CollectBox{0}{\worksheet@gy}{name\worksheet@r}%
+    }%
+\end{tikzpicture}
+\end{center}
+}
+
+% Header for the name-collection sheet: registration markers + QR, then the
+% printed exemplar name in a name-style box, then the copying instructions.
+\newcommand{\WorksheetNameHeader}{%
+
+\WorksheetMarkers
+
+\vspace*{0.5in}
+
+\noindent\textbf{Check that the name written at the top is yours.  Then write your name below into every box, just as you would write it
+at the top of a handout.}
+
+\vspace{0.2in}
+
+\noindent\textbf{Name:}\\[4pt]
+\noindent
+\tikz{
+    \draw[line width=\worksheet@namelinewidth]
+        (0,0) rectangle (\worksheet@nameboxwidth,\worksheet@nameboxheight);
+    \node[font=\Large] at
+        (.5*\worksheet@nameboxwidth,.5*\worksheet@nameboxheight)
+        {\worksheet@studentname};
+}
 
 \vspace{0.25in}
 }
