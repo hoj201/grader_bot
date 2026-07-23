@@ -59,6 +59,31 @@ def test_render_marked_page_writes_correct_answer_only_for_wrong(page, monkeypat
     assert [c["answer"] for c in calls] == ["5"]
 
 
+def test_render_marked_page_draws_note_for_wrong_answer(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.4, 0.2, 0.1)}
+    results = {"q1": QuestionResult(answer=r"\frac{3}{8}", response=r"\frac{45}{120}", correct=False, note="simplify")}
+    calls = []
+
+    def fake_draw_note(img, note, origin, box_height, color):
+        calls.append(note)
+
+    monkeypatch.setattr(markup, "_draw_note", fake_draw_note)
+
+    render_marked_page(image, results, boxes)
+
+    assert calls == ["simplify"]
+
+
+def test_render_marked_page_draws_no_note_when_absent(page, monkeypatch):
+    image, results, boxes = page  # q2 is wrong but carries no note
+    monkeypatch.setattr(
+        markup, "_draw_note", lambda *a: pytest.fail("note drawn without one")
+    )
+
+    render_marked_page(image, results, boxes)
+
+
 def test_render_marked_page_stamps_score_header(page, monkeypatch):
     image, results, boxes = page
     calls = []

@@ -49,6 +49,14 @@ def _draw_cross(image: np.ndarray, center: Tuple[int, int], size: int, color, th
     cv2.line(image, (cx - s, cy + s), (cx + s, cy - s), color, thickness)
 
 
+def _draw_note(image: np.ndarray, note: str, origin: Tuple[int, int], box_height: int, color) -> None:
+    """Writes a short feedback word (e.g. "simplify") at `origin`, sized
+    relative to the answer box height. Modifies `image` in place."""
+    scale = max(box_height / 60.0, 0.4)
+    thickness = max(int(round(scale * 2)), 1)
+    cv2.putText(image, note, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
+
+
 def _draw_score_header(image: np.ndarray, correct: int, total: int) -> None:
     """Draws a printed 'Score: correct/total' at the top-center of the page,
     scaled to the page width. Modifies `image` in place."""
@@ -109,6 +117,11 @@ def render_marked_page(
             ans_x1 = min(ans_x0 + (x1 - x0), width)
             if ans_x1 > ans_x0:
                 marked = _draw_answer(marked, (ans_x0, y0, ans_x1, y1), result.answer, font, text_size)
+
+            # A feedback nudge (e.g. "simplify") goes just below the box.
+            if result.note:
+                note_y = min(y1 + box_height, height - 1)
+                _draw_note(marked, result.note, (ans_x0, note_y), box_height, color)
 
     return marked
 

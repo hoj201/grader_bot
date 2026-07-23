@@ -14,3 +14,4 @@ class QuestionResult:
     answer: str    # the stored correct answer (LaTeX)
     response: str  # what the student wrote, as OCR'd (LaTeX; "" if blank)
     correct: bool
+    note: str = ""  # feedback nudge for wrong answers, e.g. "simplify" (issue #38)
