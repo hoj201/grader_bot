@@ -8,7 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
-from graderbot.grading import grade_hw, is_correct
+from graderbot.grading import grade_hw, grade_response, is_correct
 from graderbot.imaging import (
     box_pixel_rect,
     load_pdf_pages_rgb,
@@ -228,10 +228,65 @@ def test_extract_name_matches_closest_roster_name(boxes):
         ("123", "128", False),
         (r"\frac{13}{1}", r"\frac{13}{2}", False),
         ("1.234567", "1.28456", False),
+        # Unsimplified fractions with the right value are wrong (issue #39).
+        (r"\frac{10}{21}", r"\frac{10}{21}", True),
+        (r"\frac{20}{42}", r"\frac{10}{21}", False),
+        (r"\frac{5}{10}", r"\frac{1}{2}", False),
+        (r"\frac{26}{2}", "13", False),
     ],
 )
 def test_is_correct(response, answer, expected):
     assert is_correct(response, answer) == expected
+
+
+@pytest.mark.parametrize(
+    "response,answer,expected",
+    [
+        # Issue #39: mathpix reads the fraction bar as a '1'.
+        ("10 1 21", r"\frac{10}{21}", True),
+        # Literal forward slash, with and without spaces.
+        ("10 / 21", r"\frac{10}{21}", True),
+        ("10/21", r"\frac{10}{21}", True),
+        # Fully whitespace-collapsed, bar reinterpreted from the middle '1'.
+        ("5112", r"\frac{5}{12}", True),
+        ("5 1 12", r"\frac{5}{12}", True),
+        # Mixed number: 1 3/4 == 7/4, and its bar-as-1 garble "1 3 1 4".
+        ("1 3/4", r"\frac{7}{4}", True),
+        ("1 3 1 4", r"\frac{7}{4}", True),
+        # Unsimplified fractions of the right value must still be wrong.
+        ("20 1 42", r"\frac{10}{21}", False),
+        ("20/42", r"\frac{10}{21}", False),
+        # A genuinely wrong response stays wrong.
+        ("10 1 22", r"\frac{10}{21}", False),
+        # Leniency must not fire for integer answers.
+        ("131", "13", False),
+    ],
+)
+def test_is_correct_tolerates_mathpix_fraction_garble(response, answer, expected):
+    assert is_correct(response, answer) == expected
+
+
+@pytest.mark.parametrize(
+    "response,answer,expected",
+    [
+        # Right value but not in lowest terms: wrong, with a "simplify" nudge (issue #38).
+        (r"\frac{45}{120}", r"\frac{3}{8}", (False, "simplify")),
+        (r"\frac{20}{42}", r"\frac{10}{21}", (False, "simplify")),
+        (r"\frac{5}{10}", r"\frac{1}{2}", (False, "simplify")),
+        # Improper fraction equal to a whole number is also "not simplified".
+        (r"\frac{26}{2}", "13", (False, "simplify")),
+        # Already reduced and correct: no note.
+        (r"\frac{3}{8}", r"\frac{3}{8}", (True, "")),
+        (r"\frac{13}{1}", "13", (True, "")),
+        # Wrong value gets no simplify note even if written unreduced.
+        (r"\frac{2}{6}", r"\frac{3}{8}", (False, "")),
+        (r"\frac{1}{3}", r"\frac{3}{8}", (False, "")),
+        # Garbled-OCR fraction that is genuinely right stays correct, no note.
+        ("10 1 21", r"\frac{10}{21}", (True, "")),
+    ],
+)
+def test_grade_response_flags_unsimplified_fractions(response, answer, expected):
+    assert grade_response(response, answer) == expected
 
 
 def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypatch):
