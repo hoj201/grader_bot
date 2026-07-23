@@ -49,20 +49,21 @@ def _parse_answer(text: LiteralString) -> Optional[Union[Fraction, float]]:
         return None
 
 
-def _iter_fraction_reinterpretations(text: LiteralString) -> Iterator[Fraction]:
-    """Yields the fraction values a garbled OCR `text` could plausibly
-    represent (issue #39). Mathpix frequently transcribes a hand-drawn
-    fraction bar as the digit `1` (so `10 / 21` becomes `10 1 21`) or keeps
-    it as a literal `/`. We strip all whitespace and then treat every `/` as
-    a forced bar and every `1` as an *optional* bar, enumerating both
+def _iter_fraction_reinterpretations(text: LiteralString) -> Iterator[Tuple[Fraction, bool]]:
+    """Yields `(value, reduced)` pairs for the fractions a garbled OCR `text`
+    could plausibly represent (issue #39). Mathpix frequently transcribes a
+    hand-drawn fraction bar as the digit `1` (so `10 / 21` becomes `10 1 21`)
+    or keeps it as a literal `/`. We strip all whitespace and then treat every
+    `/` as a forced bar and every `1` as an *optional* bar, enumerating both
 
       - simple fractions   num/den, and
       - mixed numbers      whole num/den  (the whole|num boundary was a
         space that whitespace-collapsing erased, so it is enumerated
         separately from the bar).
 
-    Only candidates whose written form is already in lowest terms are
-    yielded, so an unsimplified `20 1 42` is *not* offered as `10/21`."""
+    `reduced` reports whether the *written* form was already in lowest terms,
+    so callers can accept a reduced garble as correct while flagging an
+    unsimplified one (e.g. `20 1 42` -> 10/21) as a "simplify" nudge."""
     text = text.strip()
     sign = 1
     if text.startswith("-"):
@@ -83,17 +84,19 @@ def _iter_fraction_reinterpretations(text: LiteralString) -> Iterator[Fraction]:
         if not left.isdigit() or not right.isdigit():
             continue
         den = int(right)
+        if den <= 1:
+            continue
 
         # Simple fraction num/den (improper is fine, e.g. 7/4).
         num = int(left)
-        if den > 1 and num != 0 and gcd(num, den) == 1:
-            yield sign * Fraction(num, den)
+        if num != 0:
+            yield sign * Fraction(num, den), gcd(num, den) == 1
 
         # Mixed number whole num/den; split the pre-bar digits every way.
         for k in range(1, len(left)):
             whole, mnum = int(left[:k]), int(left[k:])
-            if whole >= 1 and den > 1 and 0 < mnum < den and gcd(mnum, den) == 1:
-                yield sign * (whole + Fraction(mnum, den))
+            if whole >= 1 and 0 < mnum < den:
+                yield sign * (whole + Fraction(mnum, den)), gcd(mnum, den) == 1
 
 
 def grade_response(response: LiteralString, answer: LiteralString) -> Tuple[bool, str]:
@@ -127,10 +130,15 @@ def grade_response(response: LiteralString, answer: LiteralString) -> Tuple[bool
             return True, ""
 
     # Fall back to tolerating mathpix's fraction garbling, but only when the
-    # correct answer is genuinely a fraction (issue #39).
+    # correct answer is genuinely a fraction (issue #39). A garble that reaches
+    # the right value only through an unreduced written form (e.g. `20 1 42`)
+    # is still wrong, but earns the same "simplify" nudge (issue #38).
     if isinstance(answer_value, Fraction) and answer_value.denominator != 1:
-        if any(candidate == answer_value for candidate in _iter_fraction_reinterpretations(response)):
+        reduced_flags = [reduced for value, reduced in _iter_fraction_reinterpretations(response) if value == answer_value]
+        if any(reduced_flags):
             return True, ""
+        if reduced_flags:
+            return False, _SIMPLIFY_NOTE
 
     return False, ""
 
