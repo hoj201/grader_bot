@@ -142,12 +142,14 @@ MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
 ## Web frontend
-[app.py](./graderbot/app.py) is a Streamlit app with three tabs: **Gallery**, to browse
+[app.py](./graderbot/app.py) is a Streamlit app with four tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
 presigned S3 links; **Create**, to generate a new worksheet from a
 prompt (runs the same pipeline as `graderbot.worksheetbot`, including S3 upload +
-DB storage); and **Grade**, to upload a PDF of scanned student work and have
-it auto-graded. Each page's QR code is matched to its stored worksheet, graded
+DB storage); **Grade**, to upload a PDF of scanned student work and have
+it auto-graded; and **Name sheets**, to paste a class roster (one name per line)
+and download a printable PDF of name-collection worksheets — one page per
+student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45). Each page's QR code is matched to its stored worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
 as per-student JSON results and as a single marked-up PDF (a score header on
 each page, correct answers written beside the wrong ones). It requires

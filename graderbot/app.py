@@ -8,6 +8,7 @@ environment (see README.md).
 """
 
 import os
+import subprocess
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -18,6 +19,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graderbot import storage
+from graderbot.name_worksheets import generate_name_worksheets, parse_roster
 from graderbot.scan_grader import mark_scan, results_by_student
 from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
@@ -286,6 +288,45 @@ def render_grade() -> None:
             st.warning(f"Worksheet id '{worksheet_id}' is not in the database ({len(scans)} scan(s)).")
 
 
+def render_name_sheets() -> None:
+    st.write(
+        "Paste a class roster (one student name per line) to generate a "
+        "printable PDF of name-collection worksheets — one page per student, "
+        "with their name printed at the top to copy into the practice grid."
+    )
+    roster_text = st.text_area(
+        "Roster (one student name per line)",
+        placeholder="John Doe\nChristina Kim\nMike Meyers",
+    )
+    names = parse_roster(roster_text)
+    submitted = st.button(
+        "Generate name worksheets", type="primary", disabled=not names
+    )
+
+    if not submitted:
+        return
+
+    with st.status(f"Generating {len(names)} worksheet(s)...", expanded=True) as status:
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out_path = Path(tmp) / "name_worksheets.pdf"
+                generate_name_worksheets(names, out_path)
+                pdf_bytes = out_path.read_bytes()
+        except subprocess.CalledProcessError as e:
+            status.update(label="Compilation failed", state="error")
+            st.error(f"LaTeX compilation failed:\n\n{e}")
+            return
+        status.update(label="Done", state="complete")
+
+    st.success(f"Generated {len(names)} name worksheet(s).")
+    st.download_button(
+        "Download name worksheets PDF",
+        data=pdf_bytes,
+        file_name="name_worksheets.pdf",
+        mime="application/pdf",
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="GraderBot", layout="wide")
     st.title("GraderBot")
@@ -294,13 +335,17 @@ def main() -> None:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
 
-    gallery_tab, create_tab, grade_tab = st.tabs(["Gallery", "Create", "Grade"])
+    gallery_tab, create_tab, grade_tab, names_tab = st.tabs(
+        ["Gallery", "Create", "Grade", "Name sheets"]
+    )
     with gallery_tab:
         render_gallery()
     with create_tab:
         render_create()
     with grade_tab:
         render_grade()
+    with names_tab:
+        render_name_sheets()
 
 
 main()
