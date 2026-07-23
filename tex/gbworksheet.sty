@@ -284,11 +284,15 @@
 % the student copies it into a grid of blank boxes below, so every grid box
 % becomes one training sample whose label is the printed name.
 %
-% The exemplar box keeps a plain black border in BOTH modes so
-% extract_answer_boxes (which keys on red rectangles) never mistakes the
-% printed name for a sample to crop. The grid boxes reuse the cv-mode
-% convention -- red border plus a tiny id label INSIDE the rectangle -- because
-% extract_answer_boxes skips any red box that contains no text (the id).
+% In blank (student-facing) mode the exemplar box is a plain black box holding
+% the printed name. In cv mode it becomes a red, id-labelled box (`printedname`)
+% with the name omitted, so extract_answer_boxes returns its location alongside
+% the grid boxes -- ingest crops it to OCR the printed name as each sheet's
+% label (issue #2). The name is dropped in cv mode so the only text inside the
+% red rectangle is the id (extract_answer_boxes concatenates all enclosed text
+% into the box id). The grid boxes reuse the same cv convention -- red border
+% plus a tiny id label INSIDE the rectangle -- because extract_answer_boxes
+% skips any red box that contains no text (the id).
 
 % One collection box. #1,#2 are the top-left corner (bare numbers, inches);
 % #3 is the box id. In cv mode: red border + tiny in-box id label so the box is
@@ -328,7 +332,8 @@
 }
 
 % Header for the name-collection sheet: registration markers + QR, then the
-% printed exemplar name in a name-style box, then the copying instructions.
+% printed exemplar name in a name-style box (black in blank mode, a red
+% `printedname` box in cv mode), then the copying instructions.
 \newcommand{\WorksheetNameHeader}{%
 
 \WorksheetMarkers
@@ -343,11 +348,25 @@ at the top of a handout.}
 \noindent\textbf{Name:}\\[4pt]
 \noindent
 \tikz{
-    \draw[line width=\worksheet@namelinewidth]
+    \ifworksheet@cvmode
+        \draw[
+            draw=\worksheet@namecvcolor,
+            line width=\worksheet@namecvlinewidth
+        ]
         (0,0) rectangle (\worksheet@nameboxwidth,\worksheet@nameboxheight);
-    \node[font=\Large] at
-        (.5*\worksheet@nameboxwidth,.5*\worksheet@nameboxheight)
-        {\worksheet@studentname};
+        \node[
+            font=\tiny,
+            text=\worksheet@namecvcolor,
+            anchor=south west,
+            inner sep=1pt
+        ] at (0,0) {printedname};
+    \else
+        \draw[line width=\worksheet@namelinewidth]
+            (0,0) rectangle (\worksheet@nameboxwidth,\worksheet@nameboxheight);
+        \node[font=\Large] at
+            (.5*\worksheet@nameboxwidth,.5*\worksheet@nameboxheight)
+            {\worksheet@studentname};
+    \fi
 }
 
 \vspace{0.25in}
