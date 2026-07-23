@@ -283,6 +283,11 @@ def test_is_correct_tolerates_mathpix_fraction_garble(response, answer, expected
         (r"\frac{1}{3}", r"\frac{3}{8}", (False, "")),
         # Garbled-OCR fraction that is genuinely right stays correct, no note.
         ("10 1 21", r"\frac{10}{21}", (True, "")),
+        # Garbled OCR that is right in value but unreduced also earns "simplify".
+        ("20 1 42", r"\frac{10}{21}", (False, "simplify")),
+        ("20/42", r"\frac{10}{21}", (False, "simplify")),
+        # Genuinely wrong garble gets neither correctness nor a note.
+        ("10 1 22", r"\frac{10}{21}", (False, "")),
     ],
 )
 def test_grade_response_flags_unsimplified_fractions(response, answer, expected):
