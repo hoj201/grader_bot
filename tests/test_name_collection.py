@@ -3,8 +3,10 @@
 This worksheet gathers labelled handwriting samples: graderbot prints a target
 name in the exemplar box at the top, and the student copies it into a grid of
 blank boxes. Every grid box must be discoverable by `extract_answer_boxes` (so a
-scan can be cropped into per-box samples), while the printed exemplar name must
-NOT be, since it is a known label rather than a sample to read.
+scan can be cropped into per-box samples). The exemplar box is likewise
+discoverable in cv mode -- as `printedname` -- so ingest can crop it and OCR the
+printed name as each sheet's label (issue #2); in blank (student-facing) mode it
+is a plain box holding the name.
 """
 
 import shutil
@@ -18,7 +20,9 @@ from graderbot.worksheet_synth import latexmk_worksheet
 TEMPLATE_TEX = Path(__file__).parent.parent / "tex" / "name_collection_template.tex"
 
 NAME_GRID_ROWS = 9  # must match `name grid rows` in the template (one box each)
-EXPECTED_BOX_IDS = {f"name{i}" for i in range(1, NAME_GRID_ROWS + 1)}
+GRID_BOX_IDS = {f"name{i}" for i in range(1, NAME_GRID_ROWS + 1)}
+PRINTED_NAME_BOX_ID = "printedname"
+EXPECTED_BOX_IDS = GRID_BOX_IDS | {PRINTED_NAME_BOX_ID}
 
 
 def _fill(worksheet_id: str | None = None, student_name: str = "Jane Doe") -> str:
@@ -41,9 +45,10 @@ def test_template_has_expected_placeholders():
     assert "%%WORKSHEET_ID%%" in template
 
 
-def test_cv_render_exposes_every_grid_box(tmp_path):
-    """Each blank grid box is a red, id-labelled rectangle, so all the boxes
-    come back from extract_answer_boxes with the expected ids."""
+def test_cv_render_exposes_every_grid_box_and_printed_name(tmp_path):
+    """Each blank grid box and the exemplar name box are red, id-labelled
+    rectangles, so they all come back from extract_answer_boxes with the
+    expected ids (the grid boxes plus `printedname`)."""
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
 
@@ -56,10 +61,10 @@ def test_cv_render_exposes_every_grid_box(tmp_path):
     assert set(boxes) == EXPECTED_BOX_IDS
 
 
-def test_exemplar_name_is_not_extracted_as_a_box(tmp_path):
-    """The printed target name sits in a plain (black) box, so it must never be
-    picked up as one of the red sample boxes -- even when it looks like a name
-    the student would write."""
+def test_cv_exemplar_box_id_excludes_printed_name(tmp_path):
+    """In cv mode the exemplar box drops the printed name and shows only the
+    `printedname` id, so the name text never leaks into the extracted box id
+    (extract_answer_boxes concatenates all text inside a red rectangle)."""
     if shutil.which("latexmk") is None:
         pytest.skip("latexmk is not installed")
 
@@ -69,7 +74,7 @@ def test_exemplar_name_is_not_extracted_as_a_box(tmp_path):
     pdf_path = latexmk_worksheet(str(tex_path), cv_mode=True)
     boxes = extract_answer_boxes(pdf_path)
 
-    assert len(boxes) == NAME_GRID_ROWS
+    assert PRINTED_NAME_BOX_ID in boxes
     assert not any("Alexander" in box_id for box_id in boxes)
 
 

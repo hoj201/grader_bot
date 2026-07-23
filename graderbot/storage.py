@@ -48,6 +48,18 @@ class WorksheetRecord:
     id: Optional[int] = None
 
 
+@dataclass
+class HandwritingSampleRecord:
+    """One handwriting sample cropped from a scanned name-collection sheet
+    (issue #2): the OCR'd printed name is the label, the crop lives in S3."""
+    student_name: str
+    box_id: str
+    image_s3url: str
+    image_sha256: str
+    created_at: Optional[str] = None
+    id: Optional[int] = None
+
+
 # --------------------------------------------------------------------------
 # SQLite
 # --------------------------------------------------------------------------
@@ -96,6 +108,22 @@ def init_db(db_path: Path) -> Connection:
             image_sha256 TEXT,
             response_json TEXT,
             response_text TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    # One row per handwriting sample cropped from a scanned name-collection
+    # sheet (issue #2), used to train a per-student name classifier. The crop
+    # itself lives in S3 (image_s3url); image_sha256 is the content hash used
+    # both as the S3 key and to dedupe identical crops on re-ingest.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS HANDWRITING_SAMPLE (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_name TEXT,
+            box_id TEXT,
+            image_s3url TEXT,
+            image_sha256 TEXT,
             created_at TEXT
         )
         """
@@ -164,6 +192,63 @@ def insert_mathpix_call(
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def insert_handwriting_sample(
+    conn: Connection, record: HandwritingSampleRecord
+) -> int:
+    """Records a single handwriting sample in the HANDWRITING_SAMPLE table
+    (issue #2) and returns the new row id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO HANDWRITING_SAMPLE
+            (student_name, box_id, image_s3url, image_sha256, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            record.student_name,
+            record.box_id,
+            record.image_s3url,
+            record.image_sha256,
+            record.created_at,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def handwriting_sample_exists(conn: Connection, image_sha256: str) -> bool:
+    """Returns True if a HANDWRITING_SAMPLE row already stores the crop with
+    this content hash, so ingest can skip re-uploading duplicate samples."""
+    row = conn.execute(
+        "SELECT 1 FROM HANDWRITING_SAMPLE WHERE image_sha256 = ? LIMIT 1",
+        (image_sha256,),
+    ).fetchone()
+    return row is not None
+
+
+_HANDWRITING_SAMPLE_COLUMNS = (
+    "id", "student_name", "box_id", "image_s3url", "image_sha256", "created_at",
+)
+
+
+def _row_to_handwriting_sample(row) -> HandwritingSampleRecord:
+    return HandwritingSampleRecord(
+        id=row[0],
+        student_name=row[1],
+        box_id=row[2],
+        image_s3url=row[3],
+        image_sha256=row[4],
+        created_at=row[5],
+    )
+
+
+def list_handwriting_samples(conn: Connection) -> List[HandwritingSampleRecord]:
+    rows = conn.execute(
+        f"SELECT {', '.join(_HANDWRITING_SAMPLE_COLUMNS)} "
+        "FROM HANDWRITING_SAMPLE ORDER BY created_at"
+    ).fetchall()
+    return [_row_to_handwriting_sample(row) for row in rows]
 
 
 # Column order shared by every WorksheetRecord SELECT, kept in sync with

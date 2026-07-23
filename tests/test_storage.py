@@ -190,6 +190,21 @@ def test_init_db_creates_sty_version_table(tmp_path):
     assert columns == {"hash", "content", "created_at"}
 
 
+def test_init_db_creates_handwriting_sample_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(HANDWRITING_SAMPLE)")}
+
+    assert columns == {
+        "id",
+        "student_name",
+        "box_id",
+        "image_s3url",
+        "image_sha256",
+        "created_at",
+    }
+
+
 def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
     record = _sample_record()
