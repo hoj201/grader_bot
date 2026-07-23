@@ -74,9 +74,13 @@
 % room for a second column across the text block, so the grid is a single
 % column.
 \def\worksheet@studentname{}
+% The box size is fixed (see above), so the header + 9 rows must fit one letter
+% page (issue #45) by controlling the inter-row gap: at 0.6in boxes, a gap much
+% above 0.2in spills the ninth box onto a second page. 0.16in keeps all 9 on one
+% page with headroom for printer fit-to-page shrink.
 \def\worksheet@ngboxwidth{3.75}   % collection box width  (inches, numeric)
 \def\worksheet@ngboxheight{0.6}   % collection box height (inches, numeric)
-\def\worksheet@ngvgap{0.22}       % vertical gap between rows
+\def\worksheet@ngvgap{0.16}       % vertical gap between rows
 \def\worksheet@ngrows{9}          % number of boxes (one column)
 
 \newif\ifworksheet@frame

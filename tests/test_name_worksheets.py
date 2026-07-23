@@ -35,7 +35,8 @@ def test_one_sheet_per_name_with_printed_name(tmp_path):
     one = generate_name_worksheets(["Jane Doe"], tmp_path / "one.pdf")
     with fitz.open(one) as doc:
         pages_per_sheet = doc.page_count
-    assert pages_per_sheet >= 1
+    # Each student's sheet must fit on a single printed page (issue #45).
+    assert pages_per_sheet == 1
 
     names = ["John Doe", "Christina Kim", "Mike Meyers"]
     out = generate_name_worksheets(names, tmp_path / "names.pdf")
