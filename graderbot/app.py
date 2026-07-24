@@ -16,10 +16,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import anthropic
+import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 
-from graderbot import storage
+from graderbot import embedding, storage
+from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_worksheets import generate_name_worksheets
 from graderbot.scan_grader import mark_scan, results_by_student
@@ -126,11 +128,14 @@ def render_roster() -> None:
                 result = ingest_name_sheets(
                     str(scan_path), DB_PATH, classroom.id, bucket=BUCKET, on_step=on_step
                 )
+                status.update(label="Embedding handwriting samples...")
+                st.write("Embedding handwriting samples...")
+                num_vectorized = embedding.vectorize_samples(DB_PATH, bucket=BUCKET)
                 status.update(label="Done", state="complete")
 
         logger.info(
-            "ingest_name_sheets classroom=%s ingested=%d skipped=%d",
-            classroom.id, len(result.records), len(result.skipped),
+            "ingest_name_sheets classroom=%s ingested=%d skipped=%d vectorized=%d",
+            classroom.id, len(result.records), len(result.skipped), num_vectorized,
         )
         st.success(f"Ingested {len(result.records)} handwriting sample(s).")
         if result.skipped:
@@ -186,6 +191,50 @@ def render_roster() -> None:
                                  use_container_width=True):
                         st.session_state[confirm_key] = True
                         st.rerun()
+
+
+def render_visualize() -> None:
+    st.write(
+        "3D t-SNE projection of each student's handwriting-sample embeddings, "
+        "for debugging the name classifier."
+    )
+    classroom = _select_classroom("visualize_classroom", allow_create=False)
+    if classroom is None:
+        return
+
+    conn = storage.init_db(DB_PATH)
+    try:
+        students = storage.list_students(conn, classroom.id)
+    finally:
+        conn.close()
+
+    if not students:
+        st.info("No students in this class yet.")
+        return
+
+    vectors, student_ids, name_image_ids = embedding.load_training_vectors(DB_PATH, bucket=BUCKET)
+    df = build_scatter_df(vectors, student_ids, name_image_ids, students)
+
+    if df.empty:
+        st.info("No handwriting-sample embeddings yet for this class.")
+        return
+
+    fig = px.scatter_3d(
+        df,
+        x="x",
+        y="y",
+        z="z",
+        color="student_name",
+        hover_data={
+            "name_image_id": True,
+            "student_name": True,
+            "x": False,
+            "y": False,
+            "z": False,
+        },
+        title=f"Handwriting embeddings: {classroom.label}",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_gallery() -> None:
@@ -513,8 +562,8 @@ def main() -> None:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
 
-    gallery_tab, create_tab, grade_tab, names_tab, roster_tab = st.tabs(
-        ["Gallery", "Create", "Grade", "Name sheets", "Roster"]
+    gallery_tab, create_tab, grade_tab, names_tab, roster_tab, visualize_tab = st.tabs(
+        ["Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize"]
     )
     with gallery_tab:
         render_gallery()
@@ -526,6 +575,8 @@ def main() -> None:
         render_name_sheets()
     with roster_tab:
         render_roster()
+    with visualize_tab:
+        render_visualize()
 
 
 main()

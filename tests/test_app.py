@@ -281,6 +281,48 @@ def test_delete_worksheet_logs_deletion(tmp_path, monkeypatch, caplog):
     assert any("deleted worksheet id=" in r.message for r in caplog.records)
 
 
+def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
+    from graderbot.name_dataset import IngestResult
+    from graderbot.storage import NameImageRecord
+
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    storage.get_or_create_classroom(conn, "Room 101")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    fake_result = IngestResult(
+        records=[
+            NameImageRecord(
+                student_id=1,
+                box_id="box-0",
+                image_s3url="https://bucket.s3.amazonaws.com/name_images/1.png",
+                image_sha256="deadbeef",
+            )
+        ],
+        skipped=[],
+    )
+    monkeypatch.setattr(
+        "graderbot.name_dataset.ingest_name_sheets", lambda *args, **kwargs: fake_result
+    )
+    vectorize_calls = []
+    monkeypatch.setattr(
+        "graderbot.embedding.vectorize_samples",
+        lambda *args, **kwargs: vectorize_calls.append(kwargs) or 1,
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Scanned PDF" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    button = next(b for b in at.button if b.label == "Ingest")
+    button.click().run()
+
+    assert not at.exception
+    assert len(vectorize_calls) == 1
+
+
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
