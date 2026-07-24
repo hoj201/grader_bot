@@ -109,6 +109,32 @@ def test_ingest_uploads_crops_and_records_rows(tmp_path, _patched):
 
 
 @mock_aws
+def test_ingest_reports_progress_via_on_step_and_logging(tmp_path, _patched, caplog):
+    """Progress must reach both the caller-supplied `on_step` (the Streamlit
+    status box) and the module logger (fly.io logs), so an ingest that OOMs
+    partway still leaves a trail of which page it got to (issue #52)."""
+    boxes = _boxes()
+    scan = _write_scan(_page_with_marks(["name1", "name2"], boxes), tmp_path / "scan.png")
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    classroom_id = _classroom_id(db_path)
+
+    messages = []
+    with caplog.at_level("INFO", logger="graderbot.name_dataset"):
+        name_dataset.ingest_name_sheets(
+            scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3,
+            on_step=lambda msg, detail=None: messages.append(msg),
+        )
+
+    assert any("Loaded 1 page" in m for m in messages)
+    assert any("matched" in m and STUDENT in m for m in messages)
+    assert any("Done" in m for m in messages)
+    assert messages == [r.message for r in caplog.records]
+
+
+@mock_aws
 def test_ingest_is_idempotent_on_reingest(tmp_path, _patched):
     boxes = _boxes()
     scan = _write_scan(_page_with_marks(["name1", "name2"], boxes), tmp_path / "scan.png")

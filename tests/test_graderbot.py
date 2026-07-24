@@ -162,6 +162,40 @@ def test_load_pdf_pages_rgb_returns_every_page(tmp_path):
     assert all(page.ndim == 3 and page.shape[2] == 3 for page in loaded)
 
 
+def test_load_pdf_pages_rgb_rasterizes_lazily(tmp_path, monkeypatch):
+    """`len()` must be cheap (no rasterizing), and pages should only be
+    rasterized as they're actually accessed -- otherwise a large multi-page
+    scan holds every page in memory at once before any processing starts,
+    which is what OOM'd fly.io on a 15MB roster upload (issue #52)."""
+    from PIL import Image
+
+    from graderbot import imaging
+
+    pages = [
+        Image.fromarray(np.full((40, 30, 3), fill, dtype=np.uint8))
+        for fill in (50, 150, 250)
+    ]
+    pdf_path = tmp_path / "multi.pdf"
+    pages[0].save(pdf_path, "PDF", save_all=True, append_images=pages[1:])
+
+    render_calls = []
+    original_render = imaging.render_pdf_page_image
+
+    def _tracking_render(pdf_filename, dpi=imaging._WORKSHEET_RENDER_DPI, page_index=0):
+        render_calls.append(page_index)
+        return original_render(pdf_filename, dpi, page_index)
+
+    monkeypatch.setattr(imaging, "render_pdf_page_image", _tracking_render)
+
+    loaded = load_pdf_pages_rgb(str(pdf_path))
+    assert len(loaded) == 3
+    assert render_calls == []  # len() alone must not rasterize anything
+
+    it = iter(loaded)
+    next(it)
+    assert render_calls == [0]  # only the first page has been rasterized so far
+
+
 def test_load_scan_pages_reads_pdf_pages_and_single_raster(tmp_path):
     from PIL import Image
 

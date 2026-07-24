@@ -37,8 +37,10 @@ load_dotenv()
 # fly.io's log capture (issue #52 -- previously app.py logged nothing).
 logging.captureWarnings(True)
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Set the level on the "graderbot" parent so other graderbot.* module loggers
+# (e.g. name_dataset's per-page ingest progress) inherit it too, not just app.py.
+logging.getLogger("graderbot").setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("graderbot.app")
-logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 _TEX_DIR = Path(__file__).resolve().parent.parent / "tex"
 TEMPLATE_PATH = Path(
@@ -117,11 +119,13 @@ def render_roster() -> None:
             scan_path.write_bytes(uploaded.getvalue())
 
             with st.status("Ingesting worksheets...", expanded=True) as status:
+                def on_step(msg: str, detail: str | None = None) -> None:
+                    status.update(label=msg)
+                    st.write(msg)
+
                 result = ingest_name_sheets(
-                    str(scan_path), DB_PATH, classroom.id, bucket=BUCKET
+                    str(scan_path), DB_PATH, classroom.id, bucket=BUCKET, on_step=on_step
                 )
-                for reason in result.skipped:
-                    st.write(f"Skipped {reason}")
                 status.update(label="Done", state="complete")
 
         logger.info(

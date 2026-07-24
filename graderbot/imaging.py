@@ -1,5 +1,6 @@
 import os
-from typing import List, Tuple
+from collections.abc import Sequence
+from typing import Iterator, List, Tuple
 
 import cv2
 import fitz
@@ -55,18 +56,42 @@ def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, p
         ).copy()
 
 
-def load_pdf_pages_rgb(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI) -> List[np.ndarray]:
-    """Rasterizes every page of `pdf_filename` at `dpi`, returning a list of RGB
-    numpy arrays (one per page). Useful when a single uploaded PDF holds a whole
-    pile of scanned worksheets, one per page."""
-    with fitz.open(pdf_filename) as doc:
-        page_count = doc.page_count
-    return [render_pdf_page_image(pdf_filename, dpi, i) for i in range(page_count)]
+class _LazyPdfPages(Sequence):
+    """A `len()`-able, iterable view over a PDF's pages that rasterizes each
+    page on demand rather than up front. A multi-page scan otherwise gets
+    rasterized entirely into memory before the first page is even processed,
+    which OOM'd fly.io's 1GB VM on a 15MB / dozens-of-page roster scan (issue
+    #52); this keeps peak memory to whatever the caller holds onto per page."""
+
+    def __init__(self, pdf_filename: str, dpi: int):
+        self._pdf_filename = pdf_filename
+        self._dpi = dpi
+        with fitz.open(pdf_filename) as doc:
+            self._count = doc.page_count
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __getitem__(self, index: int) -> np.ndarray:
+        return render_pdf_page_image(self._pdf_filename, self._dpi, index)
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        for i in range(self._count):
+            yield self[i]
 
 
-def load_scan_pages(path: str, dpi: int = _WORKSHEET_RENDER_DPI) -> List[np.ndarray]:
-    """Loads a scan source into a list of RGB page images: every page of a PDF,
-    or a single-element list for a raster image."""
+def load_pdf_pages_rgb(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI) -> Sequence[np.ndarray]:
+    """Returns a lazy, `len()`-able sequence of RGB numpy arrays, one per page
+    of `pdf_filename`, rasterized at `dpi` as each page is accessed. Useful
+    when a single uploaded PDF holds a whole pile of scanned worksheets, one
+    per page."""
+    return _LazyPdfPages(pdf_filename, dpi)
+
+
+def load_scan_pages(path: str, dpi: int = _WORKSHEET_RENDER_DPI) -> Sequence[np.ndarray]:
+    """Loads a scan source into a lazy sequence of RGB page images: every page
+    of a PDF (rasterized as accessed), or a single-element list for a raster
+    image."""
     if os.path.splitext(path)[1].lower() == ".pdf":
         return load_pdf_pages_rgb(path, dpi)
     return [load_image_rgb(path)]

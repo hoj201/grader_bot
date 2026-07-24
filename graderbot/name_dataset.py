@@ -20,6 +20,7 @@ configured S3 bucket, mirroring `mathpix_log`.
 
 import difflib
 import hashlib
+import logging
 import os
 import tempfile
 import warnings
@@ -35,6 +36,7 @@ from graderbot.models import Box
 from graderbot.name_worksheets import _fill_name_template
 from graderbot.ocr import _BOX_INSET, _NAME_MATCH_CUTOFF, _tesseract_ocr_name
 from graderbot.registration import rectify_to_canonical
+from graderbot.scan_grader import OnStep, _print_step
 from graderbot.storage import (
     NameImageRecord,
     StudentRecord,
@@ -46,6 +48,8 @@ from graderbot.storage import (
 )
 from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import latexmk_worksheet
+
+logger = logging.getLogger(__name__)
 
 PRINTED_NAME_BOX_ID = "printedname"
 
@@ -132,6 +136,7 @@ def ingest_name_sheets(
     bucket: Optional[str] = None,
     boxes: Optional[Dict[str, Box]] = None,
     s3_client=None,
+    on_step: OnStep = _print_step,
 ) -> IngestResult:
     """Ingest a scan of filled-in name-collection sheets into the handwriting
     dataset and return an `IngestResult` of the newly inserted `NameImageRecord`s
@@ -151,6 +156,10 @@ def ingest_name_sheets(
     `name_collection_boxes`), and pages that lack the four registration
     markers or a readable printed name are skipped, with the reason recorded
     in `IngestResult.skipped` (issue #51) as well as emitted as a warning.
+
+    `on_step(msg)` streams per-page progress (page loaded, matched, or
+    skipped); it's also logged via the module logger regardless of `on_step`,
+    so `fly logs` shows progress even if the process dies mid-scan (issue #52).
     """
     bucket = _log_bucket(bucket)
     if not bucket:
@@ -173,17 +182,24 @@ def ingest_name_sheets(
 
         client = storage._default_s3_client()
 
+    def step(msg: str) -> None:
+        logger.info(msg)
+        on_step(msg)
+
     conn = init_db(db_path)
     inserted: List[NameImageRecord] = []
     skipped: List[str] = []
     try:
-        for page_index, page in enumerate(load_scan_pages(scan_path)):
+        pages = load_scan_pages(scan_path)
+        step(f"Loaded {len(pages)} page(s); starting ingest.")
+        for page_index, page in enumerate(pages):
             try:
                 rectified = rectify_to_canonical(page)
             except ValueError as exc:
                 reason = f"page {page_index}: {exc}"
                 warnings.warn(f"Skipping {reason}")
                 skipped.append(reason)
+                step(f"Skipping {reason}")
                 continue
 
             text = _read_printed_name(
@@ -193,6 +209,7 @@ def ingest_name_sheets(
                 reason = f"page {page_index}: could not read the printed name."
                 warnings.warn(f"Skipping {reason}")
                 skipped.append(reason)
+                step(f"Skipping {reason}")
                 continue
 
             students = list_students(conn, classroom_id)
@@ -200,6 +217,7 @@ def ingest_name_sheets(
             if student is None:
                 first_name, last_name = _split_name(text)
                 student = get_or_create_student(conn, classroom_id, first_name, last_name)
+            step(f"page {page_index}: matched '{_display_name(student)}'.")
 
             for box_id in grid_ids:
                 crop = _crop_box(rectified, boxes[box_id], _BOX_INSET)
@@ -233,4 +251,5 @@ def ingest_name_sheets(
     finally:
         conn.close()
 
+    step(f"Done: ingested {len(inserted)} sample(s), skipped {len(skipped)} page(s).")
     return IngestResult(inserted, skipped)
