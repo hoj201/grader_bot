@@ -235,11 +235,13 @@ def _display_results(result) -> dict:
 
 def render_grade() -> None:
     st.write(
-        "Upload a PDF of scanned student work. Each page is matched to its "
-        "worksheet by its QR code, graded against the stored answer key, and "
-        "returned as a marked-up PDF plus per-student results."
+        "Upload a PDF, JPEG, or PNG of scanned student work. Each page is "
+        "matched to its worksheet by its QR code, graded against the stored "
+        "answer key, and returned as a marked-up PDF plus per-student results."
     )
-    uploaded = st.file_uploader("Student work (PDF)", type=["pdf"])
+    uploaded = st.file_uploader(
+        "Student work (PDF, JPEG, or PNG)", type=["pdf", "jpg", "jpeg", "png"]
+    )
     roster_text = st.text_area(
         "Roster (one student name per line, optional)",
         placeholder="Alice Smith\nBob Jones",
@@ -253,7 +255,8 @@ def render_grade() -> None:
     roster = [line.strip() for line in roster_text.splitlines() if line.strip()]
 
     with tempfile.TemporaryDirectory() as tmp:
-        scan_path = Path(tmp) / "scan.pdf"
+        scan_suffix = Path(uploaded.name).suffix or ".pdf"
+        scan_path = Path(tmp) / f"scan{scan_suffix}"
         scan_path.write_bytes(uploaded.getvalue())
         marked_path = Path(tmp) / "marked.pdf"
 

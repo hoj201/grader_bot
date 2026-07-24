@@ -2,7 +2,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from graderbot import storage
+from graderbot import scan_grader, storage
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
 
@@ -123,6 +123,45 @@ def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
     assert not at.exception
     # The Grade tab's uploader and roster field are present in the app tree.
     assert any("Student work" in fu.label for fu in at.get("file_uploader"))
+
+
+def test_grade_tab_uploader_accepts_pdf_jpeg_and_png(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    assert set(uploader.allowed_type) == {".pdf", ".jpg", ".jpeg", ".png"}
+
+
+def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    seen_paths = []
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None):
+        seen_paths.extend(str(p) for p in hws)
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("photo.png", b"not-a-real-png", "image/png"))
+    at.run()
+    button = next(b for b in at.button if b.label == "Grade")
+    button.click().run()
+
+    assert not at.exception
+    assert len(seen_paths) == 1
+    assert seen_paths[0].endswith(".png")
 
 
 def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatch):
