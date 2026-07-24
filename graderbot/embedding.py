@@ -54,25 +54,151 @@ class Embedder(Protocol):
         ...
 
 
+def crop_to_ink(
+    image: np.ndarray, ink_threshold: int = 40, pad_frac: float = 0.08
+) -> np.ndarray:
+    """Crop `image` to the bounding box of its ink (dark strokes), with a small
+    relative padding, so where a student wrote their name inside the crop box
+    stops mattering (issue #56). A near-blank crop (no pixel darker than
+    `ink_threshold` below white) is returned unchanged so downstream resize
+    still has something to work with.
+
+    Registration like this matters because `LocalEmbedder`'s raw-pixel
+    representation is translation-sensitive: two samples of the same name
+    written at different offsets inside the box land far apart in pixel space,
+    which is exactly the kind of nuisance variation that drags down KNN."""
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+    ink = 255 - gray.astype(np.int16)
+    mask = ink > ink_threshold
+    if not mask.any():
+        return image
+    ys, xs = np.where(mask)
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    pad_y = int(round((y1 - y0) * pad_frac))
+    pad_x = int(round((x1 - x0) * pad_frac))
+    h, w = gray.shape[:2]
+    y0, y1 = max(0, y0 - pad_y), min(h, y1 + pad_y)
+    x0, x1 = max(0, x0 - pad_x), min(w, x1 + pad_x)
+    return image[y0:y1, x0:x1]
+
+
 class LocalEmbedder:
     """Default in-process embedder: convert each crop to grayscale, invert so
     ink is high, resize to a fixed `size`, flatten, and L2-normalize. Cheap,
     deterministic, CPU-only, and sufficient given the consistent per-student
-    patterns."""
+    patterns.
 
-    def __init__(self, size: Tuple[int, int] = (32, 128)):
+    `register=True` first crops each image to its ink bounding box
+    (`crop_to_ink`) so the resize normalizes for where the name sits inside
+    the box -- removing translation/scale nuisance variation that hurts the
+    raw-pixel representation (issue #56)."""
+
+    def __init__(self, size: Tuple[int, int] = (32, 128), register: bool = False):
         # size is (height, width); names are far wider than tall.
         self.height, self.width = size
+        self.register = register
 
     @property
     def dim(self) -> int:
         return self.height * self.width
 
     def _feature(self, image: np.ndarray) -> np.ndarray:
+        if self.register:
+            image = crop_to_ink(image)
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
         ink = 255.0 - gray.astype(np.float32)  # strokes high, paper ~0
         resized = cv2.resize(ink, (self.width, self.height), interpolation=cv2.INTER_AREA)
         vector = resized.reshape(-1)
+        norm = float(np.linalg.norm(vector))
+        return vector / norm if norm > 0 else vector
+
+    def embed(self, images: List[np.ndarray]) -> np.ndarray:
+        if not images:
+            return np.empty((0, self.dim), dtype=np.float32)
+        return np.stack([self._feature(image) for image in images]).astype(np.float32)
+
+
+def hog_descriptor(
+    gray: np.ndarray,
+    win_size: Tuple[int, int] = (128, 64),
+    cell: int = 8,
+    block: int = 2,
+    nbins: int = 9,
+) -> np.ndarray:
+    """Compute a Histogram of Oriented Gradients descriptor for a grayscale
+    image (issue #56). opencv 5 dropped the Python `HOGDescriptor` binding and
+    the project has no scikit-image, so this is a small self-contained
+    implementation: resize to `win_size` (width, height), take Sobel
+    gradients, soft-bin each pixel's unsigned orientation (0-180 deg) into
+    `nbins`, accumulate per `cell`x`cell` cell, then L2-normalize overlapping
+    `block`x`block`-cell windows and concatenate. Returns a flat float32
+    vector of fixed length."""
+    w, h = win_size
+    resized = cv2.resize(gray, (w, h), interpolation=cv2.INTER_AREA).astype(np.float32)
+    gx = cv2.Sobel(resized, cv2.CV_32F, 1, 0, ksize=1)
+    gy = cv2.Sobel(resized, cv2.CV_32F, 0, 1, ksize=1)
+    magnitude = np.sqrt(gx * gx + gy * gy)
+    angle = np.rad2deg(np.arctan2(gy, gx)) % 180.0  # unsigned orientation
+
+    bin_width = 180.0 / nbins
+    pos = angle / bin_width
+    lo = np.floor(pos).astype(np.int64)
+    frac = pos - lo
+    lo %= nbins
+    hi = (lo + 1) % nbins
+
+    n_cells_y, n_cells_x = h // cell, w // cell
+    yy, xx = np.mgrid[0:h, 0:w]
+    cy, cx = yy // cell, xx // cell
+
+    hist = np.zeros((n_cells_y, n_cells_x, nbins), dtype=np.float32)
+    np.add.at(hist, (cy, cx, lo), magnitude * (1.0 - frac))
+    np.add.at(hist, (cy, cx, hi), magnitude * frac)
+
+    blocks = []
+    eps = 1e-6
+    for by in range(n_cells_y - block + 1):
+        for bx in range(n_cells_x - block + 1):
+            v = hist[by : by + block, bx : bx + block, :].reshape(-1)
+            v = v / np.sqrt((v * v).sum() + eps * eps)
+            blocks.append(v)
+    return np.concatenate(blocks).astype(np.float32)
+
+
+class HOGEmbedder:
+    """Embed crops via a Histogram of Oriented Gradients descriptor (issue
+    #56). HOG summarizes local stroke *orientation* over a grid of cells,
+    which is far more robust to the small translations, thickness changes, and
+    lighting differences between scans than `LocalEmbedder`'s raw pixels --
+    the intuition being that a name's shape lives in its stroke directions,
+    not in exactly which pixels are inked.
+
+    Each crop is ink-registered (`crop_to_ink`) then resized to a fixed HOG
+    window before the descriptor is computed and L2-normalized. CPU-only and
+    dependency-free (see `hog_descriptor`)."""
+
+    def __init__(
+        self,
+        win_size: Tuple[int, int] = (128, 64),
+        register: bool = True,
+    ):
+        # win_size is (width, height); names are far wider than tall.
+        self.win_size = win_size
+        self.register = register
+
+    @property
+    def dim(self) -> int:
+        w, h = self.win_size
+        n_cells_y, n_cells_x, block, nbins = h // 8, w // 8, 2, 9
+        n_blocks = (n_cells_y - block + 1) * (n_cells_x - block + 1)
+        return n_blocks * block * block * nbins
+
+    def _feature(self, image: np.ndarray) -> np.ndarray:
+        if self.register:
+            image = crop_to_ink(image)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+        vector = hog_descriptor(gray, self.win_size)
         norm = float(np.linalg.norm(vector))
         return vector / norm if norm > 0 else vector
 

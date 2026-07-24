@@ -11,10 +11,12 @@ import pytest
 from moto import mock_aws
 
 from graderbot.embedding import (
+    HOGEmbedder,
     LocalEmbedder,
     RemoteEmbedder,
     augment_image,
     augment_images,
+    crop_to_ink,
     load_training_images,
     load_training_vectors,
     vectorize_samples,
@@ -188,6 +190,69 @@ def test_load_training_vectors_missing_returns_empty(tmp_path):
         s3.create_bucket(Bucket=BUCKET)
         vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0
+
+
+def test_crop_to_ink_tightens_to_strokes():
+    # Small text in the corner of a large blank crop -> cropped much smaller.
+    img = np.full((120, 400, 3), 255, np.uint8)
+    cv2.putText(img, "Hi", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    cropped = crop_to_ink(img)
+    assert cropped.shape[0] < img.shape[0]
+    assert cropped.shape[1] < img.shape[1]
+    # The ink survives the crop (there are still dark pixels).
+    assert (cv2.cvtColor(cropped, cv2.COLOR_RGB2GRAY) < 128).any()
+
+
+def test_crop_to_ink_is_translation_invariant():
+    # The same text at two offsets crops to near-identical size.
+    left = _crop_with_text("Anna")  # text near left edge
+    right = np.full((60, 200, 3), 255, np.uint8)
+    cv2.putText(right, "Anna", (90, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    a, b = crop_to_ink(left), crop_to_ink(right)
+    assert abs(a.shape[0] - b.shape[0]) <= 4
+    assert abs(a.shape[1] - b.shape[1]) <= 4
+
+
+def test_crop_to_ink_returns_blank_unchanged():
+    blank = np.full((60, 200, 3), 255, np.uint8)
+    np.testing.assert_array_equal(crop_to_ink(blank), blank)
+
+
+def test_local_embedder_register_is_translation_robust():
+    # Same word at different horizontal offsets should embed closer together
+    # with registration than without.
+    left = _crop_with_text("Anna")
+    right = np.full((60, 200, 3), 255, np.uint8)
+    cv2.putText(right, "Anna", (90, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+
+    plain = LocalEmbedder(register=False)
+    reg = LocalEmbedder(register=True)
+    plain_dist = np.linalg.norm(plain.embed([left])[0] - plain.embed([right])[0])
+    reg_dist = np.linalg.norm(reg.embed([left])[0] - reg.embed([right])[0])
+    assert reg_dist < plain_dist
+
+
+def test_hog_embedder_shape_and_unit_norm():
+    embedder = HOGEmbedder()
+    images = [_crop_with_text("Anna"), _crop_with_text("Zeke")]
+    vectors = embedder.embed(images)
+    assert vectors.shape == (2, embedder.dim)
+    assert vectors.dtype == np.float32
+    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1.0, rtol=1e-5)
+
+
+def test_hog_embedder_is_deterministic_and_discriminative():
+    embedder = HOGEmbedder()
+    a1 = embedder.embed([_crop_with_text("Anna")])[0]
+    a2 = embedder.embed([_crop_with_text("Anna")])[0]
+    b = embedder.embed([_crop_with_text("Zeke")])[0]
+    np.testing.assert_array_equal(a1, a2)
+    assert np.linalg.norm(a1 - b) > np.linalg.norm(a1 - a2)
+
+
+def test_hog_embedder_handles_empty_batch():
+    embedder = HOGEmbedder()
+    assert embedder.embed([]).shape == (0, embedder.dim)
 
 
 def test_augment_image_preserves_shape_and_dtype():
