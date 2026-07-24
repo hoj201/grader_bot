@@ -13,6 +13,7 @@ from graderbot.imaging import (
     box_pixel_rect,
     load_pdf_pages_rgb,
     load_scan_pages,
+    render_pdf_page_image,
 )
 from graderbot.models import Box, QuestionResult
 from graderbot.ocr import extract_name, read_box
@@ -194,6 +195,26 @@ def test_load_pdf_pages_rgb_rasterizes_lazily(tmp_path, monkeypatch):
     it = iter(loaded)
     next(it)
     assert render_calls == [0]  # only the first page has been rasterized so far
+
+
+def test_render_pdf_page_image_caps_runaway_page_geometry(tmp_path):
+    """Some scanning apps stuff a photo's raw pixel dimensions into the PDF
+    page's point-based MediaBox instead of a real physical size -- PIL's
+    default PDF save (no `resolution` given) does exactly this, treating each
+    pixel as one point. Rendering that at our normal dpi would blow up to a
+    multi-hundred-MB raster and OOM'd fly.io on a real scan (issue #52), so
+    the output must be capped regardless of what the page claims its size is."""
+    from PIL import Image
+
+    from graderbot.imaging import _MAX_RENDER_DIMENSION_PX
+
+    huge_page = Image.fromarray(np.full((3000, 2500, 3), 200, dtype=np.uint8))
+    pdf_path = tmp_path / "huge.pdf"
+    huge_page.save(pdf_path, "PDF")  # MediaBox ends up 2500pt x 3000pt
+
+    image = render_pdf_page_image(str(pdf_path))
+
+    assert max(image.shape[:2]) <= _MAX_RENDER_DIMENSION_PX
 
 
 def test_load_scan_pages_reads_pdf_pages_and_single_raster(tmp_path):

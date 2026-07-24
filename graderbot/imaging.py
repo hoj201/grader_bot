@@ -10,6 +10,15 @@ from graderbot.models import Box
 
 _WORKSHEET_RENDER_DPI = 150
 
+# Guards against a PDF whose page geometry is wrong -- e.g. a scanning app
+# that stuffs a photo's raw pixel dimensions into the page's point-based
+# MediaBox instead of a true physical size (a 4284x5712px photo becomes a
+# "59.5in x 79.3in" page). Rendering that at our normal dpi blows up to a
+# multi-hundred-MB raster per page and OOM'd fly.io (issue #52). Our own
+# generated worksheets are always near Letter size, so this never engages
+# for them; it only clamps runaway external scans.
+_MAX_RENDER_DIMENSION_PX = 2200
+
 
 def load_image_rgb(image_fn: str) -> np.ndarray:
     """Loads `image_fn` (a PDF or raster image) as an RGB numpy array."""
@@ -46,10 +55,15 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
 
 def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, page_index: int = 0) -> np.ndarray:
     """Rasterizes a single page of `pdf_filename` at `dpi` and returns it
-    as an RGB numpy array."""
+    as an RGB numpy array. The effective dpi is clamped so neither side of
+    the output exceeds `_MAX_RENDER_DIMENSION_PX`, in case the page's declared
+    size is much larger than its real physical size."""
     with fitz.open(pdf_filename) as doc:
         page = doc[page_index]
         zoom = dpi / 72
+        longer_side_pt = max(page.rect.width, page.rect.height)
+        if longer_side_pt * zoom > _MAX_RENDER_DIMENSION_PX:
+            zoom = _MAX_RENDER_DIMENSION_PX / longer_side_pt
         pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
         return np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
             pixmap.height, pixmap.width, pixmap.n
