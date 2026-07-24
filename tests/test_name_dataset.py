@@ -260,6 +260,63 @@ def test_ingest_matches_nickname(tmp_path, monkeypatch):
 
 
 @mock_aws
+def test_ingest_does_not_fuzzy_match_a_similarly_spelled_student(tmp_path, monkeypatch):
+    """A page whose printed name is merely *similar* to an existing student
+    must not collapse into that student's record: the printed name is
+    typeset, so OCR is reliable, and a near-miss almost certainly means a
+    different student, not a misread of an existing one (issue #53 was a
+    later page's genuine name being folded into an earlier page's
+    similarly-spelled auto-created student via fuzzy matching)."""
+    boxes = _boxes()
+    monkeypatch.setattr(name_dataset, "rectify_to_canonical", lambda page: page)
+    monkeypatch.setattr(name_dataset, "_read_printed_name", lambda crop: "Jane Doerr")
+    scan = _write_scan(_page_with_marks(["name1"], boxes), tmp_path / "scan.png")
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    classroom_id = _classroom_id(db_path)
+    conn = init_db(db_path)
+    existing = get_or_create_student(conn, classroom_id, "Jane", "Doe")
+    conn.close()
+
+    records = name_dataset.ingest_name_sheets(
+        scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
+    ).records
+
+    assert all(r.student_id != existing.id for r in records)
+
+    from graderbot.storage import list_students
+
+    conn = init_db(db_path)
+    students = list_students(conn, classroom_id)
+    conn.close()
+    assert ("Jane", "Doerr") in [(s.first_name, s.last_name) for s in students]
+
+
+@mock_aws
+def test_ingest_matches_student_regardless_of_case_and_whitespace(tmp_path, monkeypatch):
+    boxes = _boxes()
+    monkeypatch.setattr(name_dataset, "rectify_to_canonical", lambda page: page)
+    monkeypatch.setattr(name_dataset, "_read_printed_name", lambda crop: "  jane   doe ")
+    scan = _write_scan(_page_with_marks(["name1"], boxes), tmp_path / "scan.png")
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    classroom_id = _classroom_id(db_path)
+    conn = init_db(db_path)
+    existing = get_or_create_student(conn, classroom_id, "Jane", "Doe")
+    conn.close()
+
+    records = name_dataset.ingest_name_sheets(
+        scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
+    ).records
+
+    assert all(r.student_id == existing.id for r in records)
+
+
+@mock_aws
 def test_ingest_auto_creates_student_on_no_roster_match(tmp_path, _patched):
     boxes = _boxes()
     scan = _write_scan(_page_with_marks(["name1"], boxes), tmp_path / "scan.png")

@@ -7,8 +7,9 @@ student copies it into. This module turns a scan of such sheets into training
 data for a per-student name classifier:
 
   rectify each page -> OCR the printed name (the label) -> resolve it to a
-  STUDENT in the target classroom (issue #43), creating one if no roster
-  entry matches -> crop each filled grid box -> upload the crop to S3
+  STUDENT in the target classroom by an exact, case/whitespace-insensitive
+  match (issue #43), creating one if no roster entry matches -> crop each
+  filled grid box -> upload the crop to S3
   (content-addressed by sha256) -> record a NAME_IMAGES row linking the
   student to the crop.
 
@@ -18,7 +19,6 @@ Box locations come from a one-off cv-mode render of the collection template
 configured S3 bucket, mirroring `mathpix_log`.
 """
 
-import difflib
 import hashlib
 import logging
 import os
@@ -34,7 +34,7 @@ import numpy as np
 from graderbot.imaging import _crop_box, load_scan_pages
 from graderbot.models import Box
 from graderbot.name_worksheets import _fill_name_template
-from graderbot.ocr import _BOX_INSET, _NAME_MATCH_CUTOFF, _tesseract_ocr_name
+from graderbot.ocr import _BOX_INSET, _tesseract_ocr_name
 from graderbot.registration import rectify_to_canonical
 from graderbot.scan_grader import OnStep, _print_step
 from graderbot.storage import (
@@ -100,18 +100,25 @@ def _display_name(student: StudentRecord) -> str:
     return f"{student.first_name} {student.last_name}".strip()
 
 
+def _normalize_name(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
 def _match_student(text: str, students: List[StudentRecord]) -> Optional[StudentRecord]:
-    """Fuzzy-matches OCR'd `text` against each student's "first last" name and
-    nickname (as `extract_name` does against a plain roster), returning the
-    matching `StudentRecord` or `None` if nothing is close enough."""
+    """Matches OCR'd `text` against each student's "first last" name or
+    nickname, ignoring case and whitespace differences. The printed name is
+    typeset (not handwritten), so OCR is reliable enough that an exact match
+    is appropriate; fuzzy matching here previously let one page's OCR result
+    collapse into an unrelated, similarly-spelled earlier page's auto-created
+    student (issue #53). Returns the matching `StudentRecord`, or `None` if no
+    student matches."""
     if not text or not students:
         return None
-    candidates = {_display_name(s): s for s in students}
+    candidates = {_normalize_name(_display_name(s)): s for s in students}
     for s in students:
         if s.nickname:
-            candidates[s.nickname] = s
-    matches = difflib.get_close_matches(text, list(candidates), n=1, cutoff=_NAME_MATCH_CUTOFF)
-    return candidates[matches[0]] if matches else None
+            candidates[_normalize_name(s.nickname)] = s
+    return candidates.get(_normalize_name(text))
 
 
 def _split_name(text: str) -> tuple[str, str]:
@@ -144,7 +151,8 @@ def ingest_name_sheets(
 
     `scan_path` is a multi-page PDF (one sheet per page) or a single raster
     image. Each page is rectified and its printed name OCR'd, then
-    fuzzy-matched against `classroom_id`'s roster (issue #43); an OCR'd name
+    exactly matched (ignoring case/whitespace) against `classroom_id`'s roster
+    (issue #43); an OCR'd name
     with no roster match auto-creates a new STUDENT in that classroom. Every
     non-blank grid box is uploaded to S3 (keyed by sha256) with a NAME_IMAGES
     row linking it to the resolved student. Crops already present (same
