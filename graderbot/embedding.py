@@ -7,9 +7,9 @@ matching than open-ended handwriting recognition. A lightweight, in-process
 embedder (`LocalEmbedder`: normalize + resize + flatten) is therefore the
 default and pulls in no heavy dependencies.
 
-The `Embedder` protocol keeps the embedding step swappable: a future
-`RemoteEmbedder` could POST crops to a separately deployed vectorizer service
-(e.g. a ResNet embedder) without touching ingest, training, or the collection
+The `Embedder` protocol keeps the embedding step swappable: `RemoteEmbedder`
+(issue #46) POSTs crops to the Voyage multimodal-3 API instead of running a
+self-hosted model, without touching ingest, training, or the collection
 format.
 
 `vectorize_samples` embeds any HANDWRITING_SAMPLE crops not already vectorized
@@ -17,6 +17,7 @@ and appends them to a single `.npz` collection on S3 (vectors + labels + the
 source sha256s, which key the append so re-running is idempotent).
 """
 
+import base64
 import io
 import os
 import warnings
@@ -25,10 +26,16 @@ from typing import List, Optional, Protocol, Tuple
 
 import cv2
 import numpy as np
+import requests
+from dotenv import load_dotenv
 
 from graderbot.storage import init_db, list_handwriting_samples, parse_s3_url
 
+load_dotenv()
+
 DEFAULT_COLLECTION_KEY = "name_vectors/collection.npz"
+_VOYAGE_MULTIMODAL_URL = "https://api.voyageai.com/v1/multimodalembeddings"
+_VOYAGE_MODEL = "voyage-multimodal-3"
 
 
 class Embedder(Protocol):
@@ -66,6 +73,50 @@ class LocalEmbedder:
         if not images:
             return np.empty((0, self.dim), dtype=np.float32)
         return np.stack([self._feature(image) for image in images]).astype(np.float32)
+
+
+class RemoteEmbedder:
+    """Embeds crops via the Voyage multimodal-3 API (issue #46) instead of a
+    self-hosted model, per the decision to outsource vectorization to a
+    pay-as-you-go embedding API rather than deploy and maintain a torch-based
+    service."""
+
+    def __init__(self, api_key: Optional[str] = None, model: str = _VOYAGE_MODEL):
+        self.api_key = api_key or os.environ.get("VOYAGE_API_KEY")
+        if not self.api_key:
+            raise EnvironmentError(
+                "VOYAGE_API_KEY must be set (e.g. in a .env file) to use RemoteEmbedder"
+            )
+        self.model = model
+
+    @staticmethod
+    def _data_uri(image: np.ndarray) -> str:
+        success, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        if not success:
+            raise ValueError("Could not encode image crop")
+        return "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+
+    def embed(self, images: List[np.ndarray]) -> np.ndarray:
+        if not images:
+            return np.empty((0, 0), dtype=np.float32)
+
+        inputs = [
+            {"content": [{"type": "image_base64", "image_base64": self._data_uri(image)}]}
+            for image in images
+        ]
+        response = requests.post(
+            _VOYAGE_MULTIMODAL_URL,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"inputs": inputs, "model": self.model},
+        )
+        response.raise_for_status()
+        data = response.json()["data"]
+        vectors = np.stack([item["embedding"] for item in data]).astype(np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        return np.divide(vectors, norms, out=vectors, where=norms > 0)
 
 
 def _resolve_bucket(bucket: Optional[str]) -> Optional[str]:

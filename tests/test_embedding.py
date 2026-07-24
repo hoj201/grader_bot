@@ -2,6 +2,7 @@
 
 import hashlib
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import boto3
 import cv2
@@ -12,6 +13,7 @@ from moto import mock_aws
 from graderbot.embedding import (
     DEFAULT_COLLECTION_KEY,
     LocalEmbedder,
+    RemoteEmbedder,
     load_vector_collection,
     vectorize_samples,
 )
@@ -56,6 +58,48 @@ def test_local_embedder_is_deterministic_and_discriminative():
 def test_local_embedder_handles_empty_batch():
     embedder = LocalEmbedder(size=(8, 8))
     assert embedder.embed([]).shape == (0, 64)
+
+
+def test_remote_embedder_requires_api_key(monkeypatch):
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+    with pytest.raises(EnvironmentError, match="VOYAGE_API_KEY"):
+        RemoteEmbedder()
+
+
+def test_remote_embedder_handles_empty_batch(monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    embedder = RemoteEmbedder()
+    with patch("graderbot.embedding.requests.post") as mock_post:
+        assert embedder.embed([]).shape == (0, 0)
+        mock_post.assert_not_called()
+
+
+def test_remote_embedder_calls_voyage_and_normalizes(monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    embedder = RemoteEmbedder()
+    images = [_crop_with_text("Anna"), _crop_with_text("Zeke")]
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": [{"embedding": [3.0, 4.0]}, {"embedding": [1.0, 0.0]}]
+    }
+    with patch("graderbot.embedding.requests.post", return_value=mock_response) as mock_post:
+        vectors = embedder.embed(images)
+
+    mock_post.assert_called_once()
+    _, kwargs = mock_post.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert kwargs["json"]["model"] == "voyage-multimodal-3"
+    assert len(kwargs["json"]["inputs"]) == 2
+    for entry in kwargs["json"]["inputs"]:
+        image_b64 = entry["content"][0]["image_base64"]
+        assert image_b64.startswith("data:image/png;base64,")
+
+    mock_response.raise_for_status.assert_called_once()
+    assert vectors.shape == (2, 2)
+    assert vectors.dtype == np.float32
+    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1.0, rtol=1e-5)
+    np.testing.assert_allclose(vectors[0], [0.6, 0.8], rtol=1e-5)
 
 
 def _seed_sample(conn, s3_client, name: str, text: str) -> str:

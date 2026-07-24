@@ -141,6 +141,18 @@ Logging failures are non-fatal — they never interrupt OCR or grading. Set in
 MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
+### Handwriting name vectorization
+`vectorize_samples` (see [embedding.py](./graderbot/embedding.py)) embeds
+handwriting crops for the name classifier (issue #2). The default
+`LocalEmbedder` is a lightweight, in-process resize+flatten embedder with no
+external dependency. `RemoteEmbedder` (issue #46) instead calls the
+[Voyage multimodal-3](https://www.voyageai.com/) embedding API — chosen over
+self-hosting a model so no heavyweight (torch) service needs to be deployed.
+To use it, pass `embedder=RemoteEmbedder()` and set in `.env`:
+```
+VOYAGE_API_KEY=<your-voyage-api-key>
+```
+
 ## Web frontend
 [app.py](./graderbot/app.py) is a Streamlit app with four tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
