@@ -28,6 +28,9 @@ moto = {extras = ["s3"], version = "^5.0.0"}
 # The app modules live in the top-level `graderbot` package; add the repo root
 # to sys.path so `import graderbot` resolves without an install step.
 pythonpath = ["."]
+# vectorizer_service/ is a separate poetry project (own env, own tests) and
+# must not be collected by graderbot's own pytest run.
+testpaths = ["tests"]
 
 
 [build-system]

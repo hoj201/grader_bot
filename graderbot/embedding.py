@@ -7,16 +7,19 @@ matching than open-ended handwriting recognition. A lightweight, in-process
 embedder (`LocalEmbedder`: normalize + resize + flatten) is therefore the
 default and pulls in no heavy dependencies.
 
-The `Embedder` protocol keeps the embedding step swappable: a future
-`RemoteEmbedder` could POST crops to a separately deployed vectorizer service
-(e.g. a ResNet embedder) without touching ingest, training, or the collection
-format.
+The `Embedder` protocol keeps the embedding step swappable: `RemoteEmbedder`
+POSTs crops to the separately deployed `vectorizer_service` (DINOv2, issue
+#46) without touching ingest, training, or the collection format. Switching
+between embedders changes the vector dimension, so the S3 collection must be
+rebuilt from scratch (not incrementally appended) whenever the embedder
+changes.
 
 `vectorize_samples` embeds any HANDWRITING_SAMPLE crops not already vectorized
 and appends them to a single `.npz` collection on S3 (vectors + labels + the
 source sha256s, which key the append so re-running is idempotent).
 """
 
+import base64
 import io
 import os
 import warnings
@@ -25,8 +28,12 @@ from typing import List, Optional, Protocol, Tuple
 
 import cv2
 import numpy as np
+import requests
+from dotenv import load_dotenv
 
 from graderbot.storage import init_db, list_handwriting_samples, parse_s3_url
+
+load_dotenv()
 
 DEFAULT_COLLECTION_KEY = "name_vectors/collection.npz"
 
@@ -66,6 +73,40 @@ class LocalEmbedder:
         if not images:
             return np.empty((0, self.dim), dtype=np.float32)
         return np.stack([self._feature(image) for image in images]).astype(np.float32)
+
+
+def _encode_png_b64(image: np.ndarray) -> str:
+    success, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    if not success:
+        raise ValueError("Could not encode crop image")
+    return base64.b64encode(encoded.tobytes()).decode("ascii")
+
+
+class RemoteEmbedder:
+    """Embedder backed by `vectorizer_service`, a separately deployed DINOv2
+    service (issue #46). Keeps torch and other heavy ML dependencies out of
+    the main graderbot app/deploy; see vectorizer_service/README.md."""
+
+    def __init__(self, url: Optional[str] = None, api_key: Optional[str] = None):
+        self.url = url or os.environ.get("VECTORIZER_SERVICE_URL")
+        self.api_key = api_key or os.environ.get("VECTORIZER_API_KEY")
+        if not self.url or not self.api_key:
+            raise EnvironmentError(
+                "VECTORIZER_SERVICE_URL and VECTORIZER_API_KEY must be set "
+                "(e.g. in a .env file) to use RemoteEmbedder"
+            )
+
+    def embed(self, images: List[np.ndarray]) -> np.ndarray:
+        if not images:
+            return np.empty((0, 0), dtype=np.float32)
+
+        response = requests.post(
+            self.url,
+            headers={"X-Api-Key": self.api_key, "Content-Type": "application/json"},
+            json={"images": [_encode_png_b64(image) for image in images]},
+        )
+        response.raise_for_status()
+        return np.array(response.json()["vectors"], dtype=np.float32)
 
 
 def _resolve_bucket(bucket: Optional[str]) -> Optional[str]:

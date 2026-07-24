@@ -7,11 +7,13 @@ import boto3
 import cv2
 import numpy as np
 import pytest
+import requests
 from moto import mock_aws
 
 from graderbot.embedding import (
     DEFAULT_COLLECTION_KEY,
     LocalEmbedder,
+    RemoteEmbedder,
     load_vector_collection,
     vectorize_samples,
 )
@@ -56,6 +58,59 @@ def test_local_embedder_is_deterministic_and_discriminative():
 def test_local_embedder_handles_empty_batch():
     embedder = LocalEmbedder(size=(8, 8))
     assert embedder.embed([]).shape == (0, 64)
+
+
+def test_remote_embedder_raises_without_env_vars(monkeypatch):
+    monkeypatch.delenv("VECTORIZER_SERVICE_URL", raising=False)
+    monkeypatch.delenv("VECTORIZER_API_KEY", raising=False)
+    with pytest.raises(EnvironmentError, match="VECTORIZER_SERVICE_URL"):
+        RemoteEmbedder()
+
+
+def test_remote_embedder_handles_empty_batch(monkeypatch):
+    monkeypatch.setenv("VECTORIZER_SERVICE_URL", "https://example.invalid/embed")
+    monkeypatch.setenv("VECTORIZER_API_KEY", "secret")
+    assert RemoteEmbedder().embed([]).shape == (0, 0)
+
+
+def test_remote_embedder_posts_and_parses_vectors(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"vectors": [[1.0, 2.0], [3.0, 4.0]]}
+
+    def fake_post(url, headers=None, json=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("graderbot.embedding.requests.post", fake_post)
+    embedder = RemoteEmbedder(url="https://vectorizer.example/embed", api_key="secret")
+
+    vectors = embedder.embed([_crop_with_text("Anna"), _crop_with_text("Zeke")])
+
+    assert vectors.shape == (2, 2)
+    assert vectors.dtype == np.float32
+    assert captured["url"] == "https://vectorizer.example/embed"
+    assert captured["headers"]["X-Api-Key"] == "secret"
+    assert len(captured["json"]["images"]) == 2
+
+
+def test_remote_embedder_raises_on_http_error(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            raise requests.HTTPError("boom")
+
+    monkeypatch.setattr("graderbot.embedding.requests.post", lambda *a, **k: FakeResponse())
+    embedder = RemoteEmbedder(url="https://vectorizer.example/embed", api_key="secret")
+
+    with pytest.raises(requests.HTTPError):
+        embedder.embed([_crop_with_text("Anna")])
 
 
 def _seed_sample(conn, s3_client, name: str, text: str) -> str:

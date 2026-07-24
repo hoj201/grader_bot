@@ -141,6 +141,20 @@ Logging failures are non-fatal — they never interrupt OCR or grading. Set in
 MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
+### Handwriting vectorization (DINOv2)
+`graderbot.embedding.RemoteEmbedder` embeds handwriting-sample crops by
+calling out to [vectorizer_service](./vectorizer_service/), a DINOv2 model
+deployed separately on Modal (issue #46) so torch and other heavy ML
+dependencies stay out of this app's own deploy. It's used by
+`vectorize_samples` in place of the default `LocalEmbedder`. Set in `.env`:
+```
+VECTORIZER_SERVICE_URL=<the deployed/`modal serve` endpoint URL>
+VECTORIZER_API_KEY=<shared secret, matches the vectorizer-api-key Modal secret>
+```
+See [vectorizer_service/README.md](./vectorizer_service/README.md) for
+deploying the service and migrating the vector collection after a model
+change.
+
 ## Web frontend
 [app.py](./graderbot/app.py) is a Streamlit app with four tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
