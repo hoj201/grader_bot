@@ -16,11 +16,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import anthropic
+import numpy as np
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 
-from graderbot import embedding, storage
+from graderbot import embedding, name_classifier, storage
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_worksheets import generate_name_worksheets
@@ -235,6 +236,50 @@ def render_visualize() -> None:
         title=f"Handwriting embeddings: {classroom.label}",
     )
     st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    st.subheader("Classifier accuracy")
+    st.write(
+        "Leave-one-out cross-validation of the name classifier: each "
+        "handwriting sample is held out and predicted from the rest, "
+        "scored one student at a time (issue #55)."
+    )
+    if st.button("Evaluate classifier", key="visualize_evaluate_classifier"):
+        roster_ids = {s.id for s in students}
+        in_roster = np.isin(student_ids, list(roster_ids))
+        with st.spinner("Running leave-one-out cross-validation..."):
+            accuracy, insufficient, confusion = name_classifier.loo_cross_validate(
+                vectors[in_roster], student_ids[in_roster]
+            )
+        name_by_id = {s.id: f"{s.first_name} {s.last_name}".strip() for s in students}
+        if accuracy:
+            rows = [
+                {"Student": name_by_id.get(student_id, str(student_id)), "LOO accuracy": acc}
+                for student_id, acc in accuracy.items()
+            ]
+            rows.sort(key=lambda row: row["Student"])
+            for row in rows:
+                row["LOO accuracy"] = f"{row['LOO accuracy']:.0%}"
+            st.table(rows)
+
+            st.caption("Confusion matrix (rows: actual student, columns: predicted)")
+            predicted_ids = {pred for preds in confusion.values() for pred in preds}
+            column_ids = sorted(
+                set(accuracy) | predicted_ids, key=lambda sid: name_by_id.get(sid, str(sid))
+            )
+            matrix_rows = []
+            for true_id in sorted(accuracy, key=lambda sid: name_by_id.get(sid, str(sid))):
+                row = {"Actual": name_by_id.get(true_id, str(true_id))}
+                for pred_id in column_ids:
+                    label = name_by_id.get(pred_id, str(pred_id))
+                    row[label] = confusion.get(true_id, {}).get(pred_id, 0)
+                matrix_rows.append(row)
+            st.dataframe(matrix_rows, use_container_width=True)
+        else:
+            st.info("No students have enough samples yet for cross-validation.")
+        if insufficient:
+            names = ", ".join(name_by_id.get(sid, str(sid)) for sid in insufficient)
+            st.caption(f"Insufficient data (need ≥2 samples): {names}")
 
 
 def render_gallery() -> None:

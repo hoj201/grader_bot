@@ -11,6 +11,8 @@ from sklearn.neighbors import KNeighborsClassifier
 from graderbot.name_classifier import (
     DEFAULT_CLASSIFIER_KEY,
     load_classifier,
+    loo_cross_validate,
+    loo_cross_validate_from_db,
     save_classifier,
     train_from_db,
     train_name_classifier,
@@ -118,3 +120,92 @@ def test_train_from_db(tmp_path):
     clf = train_from_db(db_path, BUCKET, s3_client=s3)
     assert set(clf.classes_.tolist()) == {anna.id, zeke.id}
     assert DEFAULT_CLASSIFIER_KEY  # sanity: constant exists
+
+
+def test_loo_cross_validate_scores_well_separated_clusters_perfectly():
+    vectors, labels = _labelled_vectors()
+    accuracy, insufficient, confusion = loo_cross_validate(vectors, labels)
+
+    assert accuracy == {"Anna": 1.0, "Zeke": 1.0}
+    assert insufficient == []
+    # Perfect separation: every held-out fold predicts its own true label.
+    assert confusion == {"Anna": {"Anna": 5}, "Zeke": {"Zeke": 5}}
+
+
+def test_loo_cross_validate_flags_singleton_class_as_insufficient():
+    vectors, labels = _labelled_vectors()
+    # A third student with only one sample: too few to leave one out and
+    # still have a training example of their own handwriting.
+    lonely = np.array([[0, 1, 0, 0, 0, 0, 0, 0]], dtype=np.float32)
+    vectors = np.vstack([vectors, lonely])
+    labels = np.append(labels, "Lonely")
+
+    accuracy, insufficient, confusion = loo_cross_validate(vectors, labels)
+
+    assert insufficient == ["Lonely"]
+    assert "Lonely" not in accuracy
+    assert set(accuracy) == {"Anna", "Zeke"}
+    assert "Lonely" not in confusion
+
+
+def test_loo_cross_validate_caps_folds_per_class():
+    # A single prolific student with far more samples than the fold cap:
+    # only `max_folds_per_class` of their samples should be held out and
+    # scored, not all of them, so evaluation cost doesn't grow with their
+    # sample count.
+    rng = np.random.default_rng(1)
+    vectors = rng.normal(0.0, 0.01, size=(30, 8)) + np.array([1, 0, 0, 0, 0, 0, 0, 0])
+    vectors = vectors.astype(np.float32)
+    labels = np.array(["Anna"] * 30)
+
+    accuracy, insufficient, confusion = loo_cross_validate(
+        vectors, labels, max_folds_per_class=5
+    )
+
+    assert insufficient == []
+    assert sum(confusion["Anna"].values()) == 5
+
+
+@mock_aws
+def test_loo_cross_validate_from_db(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    zeke = get_or_create_student(conn, classroom.id, "Zeke", "Jones")
+
+    vectors, labels = _labelled_vectors()
+    for i, (vector, label) in enumerate(zip(vectors, labels)):
+        student = anna if label == "Anna" else zeke
+        image_id = insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=student.id,
+                box_id="name1",
+                image_s3url=f"https://{BUCKET}.s3.amazonaws.com/img{i}.png",
+                image_sha256=f"sha{i}",
+            ),
+        )
+        key = f"name_embeddings/{student.id}/{image_id}.npy"
+        buffer = io.BytesIO()
+        np.save(buffer, vector)
+        s3.put_object(Bucket=BUCKET, Key=key, Body=buffer.getvalue())
+        insert_name_embedding(
+            conn,
+            NameEmbeddingRecord(
+                student_id=student.id,
+                name_image_id=image_id,
+                embedding_s3url=f"https://{BUCKET}.s3.amazonaws.com/{key}",
+            ),
+        )
+    conn.close()
+
+    accuracy, insufficient, confusion = loo_cross_validate_from_db(db_path, BUCKET, s3_client=s3)
+
+    assert set(accuracy) == {anna.id, zeke.id}
+    assert accuracy[anna.id] == 1.0
+    assert accuracy[zeke.id] == 1.0
+    assert insufficient == []
+    assert confusion == {anna.id: {anna.id: 5}, zeke.id: {zeke.id: 5}}

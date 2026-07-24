@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import boto3
+import numpy as np
 from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
@@ -321,6 +322,51 @@ def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
 
     assert not at.exception
     assert len(vectorize_calls) == 1
+
+
+def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    classroom = storage.get_or_create_classroom(conn, "Room 101")
+    anna = storage.get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    zeke = storage.get_or_create_student(conn, classroom.id, "Zeke", "Jones")
+    lonely = storage.get_or_create_student(conn, classroom.id, "Lonely", "Student")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(3, 4)).astype(np.float32)
+    student_ids = np.array([anna.id, zeke.id, lonely.id])
+    name_image_ids = np.array([1, 2, 3])
+    monkeypatch.setattr(
+        "graderbot.embedding.load_training_vectors",
+        lambda *args, **kwargs: (vectors, student_ids, name_image_ids),
+    )
+    monkeypatch.setattr(
+        "graderbot.name_classifier.loo_cross_validate",
+        lambda *args, **kwargs: (
+            {anna.id: 1.0, zeke.id: 0.5},
+            [lonely.id],
+            {anna.id: {anna.id: 1}, zeke.id: {zeke.id: 1, anna.id: 1}},
+        ),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    button = next(b for b in at.button if b.label == "Evaluate classifier")
+    button.click().run()
+
+    assert not at.exception
+    table_rows = at.table[0].value.to_dict("records")
+    assert {"Student": "Anna Smith", "LOO accuracy": "100%"} in table_rows
+    assert {"Student": "Zeke Jones", "LOO accuracy": "50%"} in table_rows
+
+    matrix_rows = at.dataframe[0].value.to_dict("records")
+    assert {"Actual": "Anna Smith", "Anna Smith": 1, "Zeke Jones": 0} in matrix_rows
+    assert {"Actual": "Zeke Jones", "Anna Smith": 1, "Zeke Jones": 1} in matrix_rows
+
+    captions = " ".join(c.value for c in at.caption)
+    assert "Lonely Student" in captions
 
 
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
