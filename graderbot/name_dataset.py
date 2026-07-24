@@ -25,7 +25,7 @@ import tempfile
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 import cv2
 import numpy as np
@@ -48,6 +48,16 @@ from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import latexmk_worksheet
 
 PRINTED_NAME_BOX_ID = "printedname"
+
+
+class IngestResult(NamedTuple):
+    """Result of `ingest_name_sheets`: the newly inserted records plus a
+    human-readable reason for every page that was skipped, so callers (the
+    Roster tab in particular) can show *why* a scan yielded fewer samples than
+    expected instead of a bare count (issue #51)."""
+
+    records: List[NameImageRecord]
+    skipped: List[str]
 
 # A grid box with less than this fraction of dark pixels (after the border is
 # inset away by `_BOX_INSET`) is treated as blank and skipped, so unused rows
@@ -122,9 +132,10 @@ def ingest_name_sheets(
     bucket: Optional[str] = None,
     boxes: Optional[Dict[str, Box]] = None,
     s3_client=None,
-) -> List[NameImageRecord]:
+) -> IngestResult:
     """Ingest a scan of filled-in name-collection sheets into the handwriting
-    dataset and return the newly inserted `NameImageRecord`s.
+    dataset and return an `IngestResult` of the newly inserted `NameImageRecord`s
+    plus a reason string for every page that was skipped.
 
     `scan_path` is a multi-page PDF (one sheet per page) or a single raster
     image. Each page is rectified and its printed name OCR'd, then
@@ -134,15 +145,18 @@ def ingest_name_sheets(
     row linking it to the resolved student. Crops already present (same
     content hash) are skipped, so re-ingesting a scan is idempotent.
 
-    Ingest is a no-op returning `[]` unless an S3 bucket is configured (via the
-    `bucket` argument or the `S3_BUCKET` env var). `boxes` overrides the box
-    layout (otherwise computed once via `name_collection_boxes`), and pages that
-    lack the four registration markers are skipped with a warning.
+    Ingest is a no-op returning `IngestResult([], [reason])` unless an S3
+    bucket is configured (via the `bucket` argument or the `S3_BUCKET` env
+    var). `boxes` overrides the box layout (otherwise computed once via
+    `name_collection_boxes`), and pages that lack the four registration
+    markers or a readable printed name are skipped, with the reason recorded
+    in `IngestResult.skipped` (issue #51) as well as emitted as a warning.
     """
     bucket = _log_bucket(bucket)
     if not bucket:
-        warnings.warn("ingest_name_sheets: no S3 bucket configured; skipping.")
-        return []
+        reason = "no S3 bucket configured; skipping."
+        warnings.warn(f"ingest_name_sheets: {reason}")
+        return IngestResult([], [reason])
 
     if boxes is None:
         boxes = name_collection_boxes()
@@ -161,21 +175,24 @@ def ingest_name_sheets(
 
     conn = init_db(db_path)
     inserted: List[NameImageRecord] = []
+    skipped: List[str] = []
     try:
         for page_index, page in enumerate(load_scan_pages(scan_path)):
             try:
                 rectified = rectify_to_canonical(page)
             except ValueError as exc:
-                warnings.warn(f"Skipping page {page_index}: {exc}")
+                reason = f"page {page_index}: {exc}"
+                warnings.warn(f"Skipping {reason}")
+                skipped.append(reason)
                 continue
 
             text = _read_printed_name(
                 _crop_box(rectified, boxes[PRINTED_NAME_BOX_ID], _BOX_INSET)
             )
             if not text:
-                warnings.warn(
-                    f"Skipping page {page_index}: could not read the printed name."
-                )
+                reason = f"page {page_index}: could not read the printed name."
+                warnings.warn(f"Skipping {reason}")
+                skipped.append(reason)
                 continue
 
             students = list_students(conn, classroom_id)
@@ -191,7 +208,9 @@ def ingest_name_sheets(
 
                 ok, encoded = cv2.imencode(".png", cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
                 if not ok:
-                    warnings.warn(f"Could not encode {box_id} on page {page_index}.")
+                    reason = f"page {page_index}: could not encode box {box_id}."
+                    warnings.warn(f"Skipping {reason}")
+                    skipped.append(reason)
                     continue
                 png_bytes = encoded.tobytes()
                 sha256 = hashlib.sha256(png_bytes).hexdigest()
@@ -214,4 +233,4 @@ def ingest_name_sheets(
     finally:
         conn.close()
 
-    return inserted
+    return IngestResult(inserted, skipped)

@@ -108,12 +108,19 @@ def render_roster() -> None:
             scan_path.write_bytes(uploaded.getvalue())
 
             with st.status("Ingesting worksheets...", expanded=True) as status:
-                records = ingest_name_sheets(
+                result = ingest_name_sheets(
                     str(scan_path), DB_PATH, classroom.id, bucket=BUCKET
                 )
+                for reason in result.skipped:
+                    st.write(f"Skipped {reason}")
                 status.update(label="Done", state="complete")
 
-        st.success(f"Ingested {len(records)} handwriting sample(s).")
+        st.success(f"Ingested {len(result.records)} handwriting sample(s).")
+        if result.skipped:
+            st.warning(
+                f"{len(result.skipped)} page(s) were skipped:\n"
+                + "\n".join(f"- {reason}" for reason in result.skipped)
+            )
         st.rerun()
 
     st.divider()

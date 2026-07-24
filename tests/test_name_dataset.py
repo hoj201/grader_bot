@@ -72,7 +72,8 @@ def test_ingest_is_noop_when_no_bucket(monkeypatch, tmp_path):
     with pytest.warns(UserWarning, match="no S3 bucket"):
         result = name_dataset.ingest_name_sheets("nonexistent.pdf", tmp_path / "db.sqlite3", classroom_id=1)
 
-    assert result == []
+    assert result.records == []
+    assert result.skipped == ["no S3 bucket configured; skipping."]
 
 
 @mock_aws
@@ -85,9 +86,11 @@ def test_ingest_uploads_crops_and_records_rows(tmp_path, _patched):
     db_path = tmp_path / "db.sqlite3"
     classroom_id = _classroom_id(db_path)
 
-    records = name_dataset.ingest_name_sheets(
+    result = name_dataset.ingest_name_sheets(
         scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
     )
+    records = result.records
+    assert result.skipped == []
 
     # name3 is blank, so only the two filled boxes become samples.
     assert {r.box_id for r in records} == {"name1", "name2"}
@@ -116,11 +119,11 @@ def test_ingest_is_idempotent_on_reingest(tmp_path, _patched):
     classroom_id = _classroom_id(db_path)
 
     first = name_dataset.ingest_name_sheets(scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3)
-    assert len(first) == 2
+    assert len(first.records) == 2
 
     # Re-ingesting the same scan inserts nothing new (crops dedupe by sha256).
     second = name_dataset.ingest_name_sheets(scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3)
-    assert second == []
+    assert second.records == []
 
     conn = init_db(db_path)
     rows = list_name_images(conn)
@@ -141,11 +144,42 @@ def test_ingest_skips_page_without_readable_name(tmp_path, monkeypatch):
     classroom_id = _classroom_id(db_path)
 
     with pytest.warns(UserWarning, match="could not read the printed name"):
-        records = name_dataset.ingest_name_sheets(
+        result = name_dataset.ingest_name_sheets(
             scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
         )
 
-    assert records == []
+    assert result.records == []
+    assert result.skipped == ["page 0: could not read the printed name."]
+
+
+@mock_aws
+def test_ingest_reports_skip_reason_for_unregistered_page(tmp_path, monkeypatch):
+    """A page missing its registration markers is skipped, and the reason
+    raised by `rectify_to_canonical` is surfaced in `IngestResult.skipped`
+    (not just as a `warnings.warn`), so the Roster tab can show the user why a
+    scan yielded fewer samples than expected (issue #51)."""
+    boxes = _boxes()
+
+    def _boom(page):
+        raise ValueError("Could not find registration marker(s) [0, 1] in page")
+
+    monkeypatch.setattr(name_dataset, "rectify_to_canonical", _boom)
+    scan = _write_scan(_page_with_marks(["name1"], boxes), tmp_path / "scan.png")
+
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    classroom_id = _classroom_id(db_path)
+
+    with pytest.warns(UserWarning, match="registration marker"):
+        result = name_dataset.ingest_name_sheets(
+            scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
+        )
+
+    assert result.records == []
+    assert len(result.skipped) == 1
+    assert "page 0" in result.skipped[0]
+    assert "registration marker" in result.skipped[0]
 
 
 @mock_aws
@@ -163,7 +197,7 @@ def test_ingest_matches_existing_roster_student(tmp_path, _patched):
 
     records = name_dataset.ingest_name_sheets(
         scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
-    )
+    ).records
 
     assert all(r.student_id == existing.id for r in records)
 
@@ -190,7 +224,7 @@ def test_ingest_matches_nickname(tmp_path, monkeypatch):
 
     records = name_dataset.ingest_name_sheets(
         scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
-    )
+    ).records
 
     conn = init_db(db_path)
     n_students_after = len(conn.execute("SELECT id FROM STUDENT").fetchall())
@@ -211,7 +245,7 @@ def test_ingest_auto_creates_student_on_no_roster_match(tmp_path, _patched):
 
     records = name_dataset.ingest_name_sheets(
         scan, db_path, classroom_id, bucket=BUCKET, boxes=boxes, s3_client=s3
-    )
+    ).records
     assert len(records) == 1
 
     from graderbot.storage import list_students
