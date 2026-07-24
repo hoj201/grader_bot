@@ -11,16 +11,17 @@ import pytest
 from moto import mock_aws
 
 from graderbot.embedding import (
-    DEFAULT_COLLECTION_KEY,
     LocalEmbedder,
     RemoteEmbedder,
-    load_vector_collection,
+    load_training_vectors,
     vectorize_samples,
 )
 from graderbot.storage import (
-    HandwritingSampleRecord,
+    NameImageRecord,
+    get_or_create_classroom,
+    get_or_create_student,
     init_db,
-    insert_handwriting_sample,
+    insert_name_image,
 )
 
 BUCKET = "grader-handwriting"
@@ -102,25 +103,27 @@ def test_remote_embedder_calls_voyage_and_normalizes(monkeypatch):
     np.testing.assert_allclose(vectors[0], [0.6, 0.8], rtol=1e-5)
 
 
-def _seed_sample(conn, s3_client, name: str, text: str) -> str:
-    """Upload a crop to S3 and insert a HANDWRITING_SAMPLE row; return its sha."""
+def _seed_sample(conn, s3_client, classroom_id: int, first_name: str, text: str) -> int:
+    """Create a student, upload a crop to S3, and insert a NAME_IMAGES row;
+    return the student's id."""
+    student = get_or_create_student(conn, classroom_id, first_name, "Doe")
     crop = _crop_with_text(text)
     _, encoded = cv2.imencode(".png", crop)
     png = encoded.tobytes()
     sha = hashlib.sha256(png).hexdigest()
-    key = f"handwriting/{name}/{sha}.png"
+    key = f"handwriting/{classroom_id}/{student.id}/{sha}.png"
     s3_client.put_object(Bucket=BUCKET, Key=key, Body=png, ContentType="image/png")
-    insert_handwriting_sample(
+    insert_name_image(
         conn,
-        HandwritingSampleRecord(
-            student_name=name,
+        NameImageRecord(
+            student_id=student.id,
             box_id="name1",
             image_s3url=f"https://{BUCKET}.s3.amazonaws.com/{key}",
             image_sha256=sha,
             created_at=datetime.now(timezone.utc).isoformat(),
         ),
     )
-    return sha
+    return student.id
 
 
 @mock_aws
@@ -129,17 +132,18 @@ def test_vectorize_samples_builds_collection(tmp_path):
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
     conn = init_db(db_path)
-    _seed_sample(conn, s3, "Anna", "Anna")
-    _seed_sample(conn, s3, "Zeke", "Zeke")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna_id = _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
+    zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
 
     added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3)
     assert added == 2
 
-    vectors, labels, shas = load_vector_collection(BUCKET, s3_client=s3)
+    vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape == (2, LocalEmbedder().dim)
-    assert set(labels.tolist()) == {"Anna", "Zeke"}
-    assert len(shas) == 2
+    assert set(student_ids.tolist()) == {anna_id, zeke_id}
+    assert len(name_image_ids) == 2
 
 
 @mock_aws
@@ -148,7 +152,8 @@ def test_vectorize_samples_appends_and_dedupes(tmp_path):
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
     conn = init_db(db_path)
-    _seed_sample(conn, s3, "Anna", "Anna")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
     conn.close()
 
     assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
@@ -157,13 +162,13 @@ def test_vectorize_samples_appends_and_dedupes(tmp_path):
 
     # Add another sample; only the new one is embedded, prior vectors preserved.
     conn = init_db(db_path)
-    _seed_sample(conn, s3, "Zeke", "Zeke")
+    _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
     assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
 
-    vectors, labels, _ = load_vector_collection(BUCKET, s3_client=s3)
+    vectors, student_ids, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape[0] == 2
-    assert sorted(labels.tolist()) == ["Anna", "Zeke"]
+    assert len(set(student_ids.tolist())) == 2
 
 
 def test_vectorize_samples_is_noop_without_bucket(monkeypatch, tmp_path):
@@ -172,10 +177,11 @@ def test_vectorize_samples_is_noop_without_bucket(monkeypatch, tmp_path):
         assert vectorize_samples(tmp_path / "db.sqlite3") == 0
 
 
-def test_load_vector_collection_missing_returns_empty():
+def test_load_training_vectors_missing_returns_empty(tmp_path):
+    db_path = tmp_path / "db.sqlite3"
+    init_db(db_path).close()
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        vectors, labels, shas = load_vector_collection(BUCKET, s3_client=s3)
-    assert vectors.size == 0 and labels.size == 0 and shas.size == 0
-    assert DEFAULT_COLLECTION_KEY  # sanity: constant exists
+        vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
+    assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0

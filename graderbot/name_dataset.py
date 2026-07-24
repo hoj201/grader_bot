@@ -6,9 +6,11 @@ prints one student's name at the top and offers a grid of blank boxes the
 student copies it into. This module turns a scan of such sheets into training
 data for a per-student name classifier:
 
-  rectify each page -> OCR the printed name (the label) -> crop each filled grid
-  box -> upload the crop to S3 (content-addressed by sha256) -> record a
-  HANDWRITING_SAMPLE row linking the name to the crop.
+  rectify each page -> OCR the printed name (the label) -> resolve it to a
+  STUDENT in the target classroom (issue #43), creating one if no roster
+  entry matches -> crop each filled grid box -> upload the crop to S3
+  (content-addressed by sha256) -> record a NAME_IMAGES row linking the
+  student to the crop.
 
 Box locations come from a one-off cv-mode render of the collection template
 (`name_collection_boxes`), where the exemplar name box is exposed as
@@ -34,11 +36,13 @@ from graderbot.name_worksheets import _fill_name_template
 from graderbot.ocr import _BOX_INSET, _NAME_MATCH_CUTOFF, _tesseract_ocr_name
 from graderbot.registration import rectify_to_canonical
 from graderbot.storage import (
-    HandwritingSampleRecord,
-    handwriting_sample_exists,
+    NameImageRecord,
+    StudentRecord,
+    get_or_create_student,
     init_db,
-    insert_handwriting_sample,
-    slugify_title,
+    insert_name_image,
+    list_students,
+    name_image_exists,
 )
 from graderbot.worksheet_boxes import extract_answer_boxes
 from graderbot.worksheet_synth import latexmk_worksheet
@@ -72,15 +76,38 @@ def name_collection_boxes() -> Dict[str, Box]:
         return extract_answer_boxes(cv_pdf)
 
 
-def _read_printed_name(crop: np.ndarray, roster: Optional[List[str]]) -> str:
-    """OCR the printed exemplar name from its crop. The name is set in a plain
-    computer font, so Tesseract is reliable here; when a roster is given the
-    result is snapped to the closest roster spelling (as `extract_name` does)."""
-    text = _tesseract_ocr_name(crop)
-    if roster:
-        matches = difflib.get_close_matches(text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
-        return matches[0] if matches else ""
-    return text
+def _read_printed_name(crop: np.ndarray) -> str:
+    """OCR the printed exemplar name from its crop. The name is set in a
+    plain computer font, so Tesseract is reliable here."""
+    return _tesseract_ocr_name(crop)
+
+
+def _display_name(student: StudentRecord) -> str:
+    return f"{student.first_name} {student.last_name}".strip()
+
+
+def _match_student(text: str, students: List[StudentRecord]) -> Optional[StudentRecord]:
+    """Fuzzy-matches OCR'd `text` against each student's "first last" name and
+    nickname (as `extract_name` does against a plain roster), returning the
+    matching `StudentRecord` or `None` if nothing is close enough."""
+    if not text or not students:
+        return None
+    candidates = {_display_name(s): s for s in students}
+    for s in students:
+        if s.nickname:
+            candidates[s.nickname] = s
+    matches = difflib.get_close_matches(text, list(candidates), n=1, cutoff=_NAME_MATCH_CUTOFF)
+    return candidates[matches[0]] if matches else None
+
+
+def _split_name(text: str) -> tuple[str, str]:
+    """Splits raw OCR text into `(first_name, last_name)` for auto-creating a
+    STUDENT with no roster match: the first token is the first name, the rest
+    (if any) is the last name."""
+    parts = text.split(maxsplit=1)
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
 
 
 def _ink_fraction(crop: np.ndarray) -> float:
@@ -91,18 +118,20 @@ def _ink_fraction(crop: np.ndarray) -> float:
 def ingest_name_sheets(
     scan_path: str,
     db_path: Path,
+    classroom_id: int,
     bucket: Optional[str] = None,
-    roster: Optional[List[str]] = None,
     boxes: Optional[Dict[str, Box]] = None,
     s3_client=None,
-) -> List[HandwritingSampleRecord]:
+) -> List[NameImageRecord]:
     """Ingest a scan of filled-in name-collection sheets into the handwriting
-    dataset and return the newly inserted `HandwritingSampleRecord`s.
+    dataset and return the newly inserted `NameImageRecord`s.
 
     `scan_path` is a multi-page PDF (one sheet per page) or a single raster
-    image. Each page is rectified, its printed name OCR'd as the label, and
-    every non-blank grid box uploaded to S3 (keyed by sha256) with a
-    HANDWRITING_SAMPLE row linking it to the name. Crops already present (same
+    image. Each page is rectified and its printed name OCR'd, then
+    fuzzy-matched against `classroom_id`'s roster (issue #43); an OCR'd name
+    with no roster match auto-creates a new STUDENT in that classroom. Every
+    non-blank grid box is uploaded to S3 (keyed by sha256) with a NAME_IMAGES
+    row linking it to the resolved student. Crops already present (same
     content hash) are skipped, so re-ingesting a scan is idempotent.
 
     Ingest is a no-op returning `[]` unless an S3 bucket is configured (via the
@@ -131,7 +160,7 @@ def ingest_name_sheets(
         client = storage._default_s3_client()
 
     conn = init_db(db_path)
-    inserted: List[HandwritingSampleRecord] = []
+    inserted: List[NameImageRecord] = []
     try:
         for page_index, page in enumerate(load_scan_pages(scan_path)):
             try:
@@ -140,14 +169,20 @@ def ingest_name_sheets(
                 warnings.warn(f"Skipping page {page_index}: {exc}")
                 continue
 
-            name = _read_printed_name(
-                _crop_box(rectified, boxes[PRINTED_NAME_BOX_ID], _BOX_INSET), roster
+            text = _read_printed_name(
+                _crop_box(rectified, boxes[PRINTED_NAME_BOX_ID], _BOX_INSET)
             )
-            if not name:
+            if not text:
                 warnings.warn(
                     f"Skipping page {page_index}: could not read the printed name."
                 )
                 continue
+
+            students = list_students(conn, classroom_id)
+            student = _match_student(text, students)
+            if student is None:
+                first_name, last_name = _split_name(text)
+                student = get_or_create_student(conn, classroom_id, first_name, last_name)
 
             for box_id in grid_ids:
                 crop = _crop_box(rectified, boxes[box_id], _BOX_INSET)
@@ -160,21 +195,21 @@ def ingest_name_sheets(
                     continue
                 png_bytes = encoded.tobytes()
                 sha256 = hashlib.sha256(png_bytes).hexdigest()
-                if handwriting_sample_exists(conn, sha256):
+                if name_image_exists(conn, sha256):
                     continue
 
-                key = f"handwriting/{slugify_title(name)}/{sha256}.png"
+                key = f"handwriting/{classroom_id}/{student.id}/{sha256}.png"
                 client.put_object(
                     Bucket=bucket, Key=key, Body=png_bytes, ContentType="image/png"
                 )
-                record = HandwritingSampleRecord(
-                    student_name=name,
+                record = NameImageRecord(
+                    student_id=student.id,
                     box_id=box_id,
                     image_s3url=f"https://{bucket}.s3.amazonaws.com/{key}",
                     image_sha256=sha256,
                     created_at=datetime.now(timezone.utc).isoformat(),
                 )
-                record.id = insert_handwriting_sample(conn, record)
+                record.id = insert_name_image(conn, record)
                 inserted.append(record)
     finally:
         conn.close()

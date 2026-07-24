@@ -19,7 +19,8 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graderbot import storage
-from graderbot.name_worksheets import generate_name_worksheets, parse_roster
+from graderbot.name_dataset import ingest_name_sheets
+from graderbot.name_worksheets import generate_name_worksheets
 from graderbot.scan_grader import mark_scan, results_by_student
 from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
@@ -49,6 +50,115 @@ def _delete_worksheet(record) -> None:
         storage.delete_worksheet(conn, record)
     finally:
         conn.close()
+
+
+_NEW_CLASSROOM_OPTION = "<create new class>"
+
+
+def _select_classroom(key: str, allow_create: bool) -> "storage.ClassroomRecord | None":
+    """Renders a classroom selectbox (optionally with a "create new" option)
+    and returns the selected/created `ClassroomRecord`, or `None` if there are
+    no classrooms yet and none was created (issue #43)."""
+    conn = storage.init_db(DB_PATH)
+    try:
+        classrooms = storage.list_classrooms(conn)
+    finally:
+        conn.close()
+
+    options = [c.label for c in classrooms]
+    if allow_create:
+        options = options + [_NEW_CLASSROOM_OPTION]
+    if not options:
+        st.info("No classes yet. Create one in the Roster tab.")
+        return None
+
+    choice = st.selectbox("Classroom", options, key=key)
+    if choice == _NEW_CLASSROOM_OPTION:
+        new_label = st.text_input("New classroom name", key=f"{key}_new_label")
+        if not new_label.strip():
+            return None
+        conn = storage.init_db(DB_PATH)
+        try:
+            return storage.get_or_create_classroom(conn, new_label.strip())
+        finally:
+            conn.close()
+
+    return next(c for c in classrooms if c.label == choice)
+
+
+def render_roster() -> None:
+    st.write(
+        "Create or select a class, upload a scan of filled-in name-learning "
+        "worksheets to add students to it, then view or remove students."
+    )
+    classroom = _select_classroom("roster_classroom", allow_create=True)
+    if classroom is None:
+        return
+
+    st.subheader("Upload name-learning worksheets")
+    uploaded = st.file_uploader(
+        "Scanned PDF or image", type=["pdf", "jpg", "jpeg", "png"], key="roster_upload"
+    )
+    submitted = st.button("Ingest", type="primary", disabled=uploaded is None)
+
+    if submitted and uploaded is not None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan_suffix = Path(uploaded.name).suffix or ".pdf"
+            scan_path = Path(tmp) / f"scan{scan_suffix}"
+            scan_path.write_bytes(uploaded.getvalue())
+
+            with st.status("Ingesting worksheets...", expanded=True) as status:
+                records = ingest_name_sheets(
+                    str(scan_path), DB_PATH, classroom.id, bucket=BUCKET
+                )
+                status.update(label="Done", state="complete")
+
+        st.success(f"Ingested {len(records)} handwriting sample(s).")
+        st.rerun()
+
+    st.divider()
+    st.subheader(f"Roster: {classroom.label}")
+    conn = storage.init_db(DB_PATH)
+    try:
+        students = storage.list_students(conn, classroom.id)
+    finally:
+        conn.close()
+
+    if not students:
+        st.info("No students in this class yet.")
+        return
+
+    for student in students:
+        with st.container(border=True):
+            cols = st.columns([4, 1])
+            label = f"{student.first_name} {student.last_name}".strip()
+            if student.nickname:
+                label += f" ({student.nickname})"
+            cols[0].markdown(label)
+
+            confirm_key = f"confirm_delete_student_{student.id}"
+            with cols[1]:
+                if st.session_state.get(confirm_key):
+                    st.warning(f"Delete {label}?")
+                    yes, no = st.columns(2)
+                    if yes.button("Confirm", key=f"do_delete_student_{student.id}",
+                                  type="primary", use_container_width=True):
+                        conn = storage.init_db(DB_PATH)
+                        try:
+                            storage.delete_student(conn, student.id)
+                        finally:
+                            conn.close()
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                    if no.button("Cancel", key=f"cancel_delete_student_{student.id}",
+                                 use_container_width=True):
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
+                else:
+                    if st.button("Delete", key=f"ask_delete_student_{student.id}",
+                                 use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
 
 
 def render_gallery() -> None:
@@ -255,17 +365,21 @@ def render_grade() -> None:
     uploaded = st.file_uploader(
         "Student work (PDF, JPEG, or PNG)", type=["pdf", "jpg", "jpeg", "png"]
     )
-    roster_text = st.text_area(
-        "Roster (one student name per line, optional)",
-        placeholder="Alice Smith\nBob Jones",
-        help="Handwritten names are fuzzy-matched to this list.",
-    )
+    classroom = _select_classroom("grade_classroom", allow_create=False)
+    roster = []
+    if classroom is not None:
+        conn = storage.init_db(DB_PATH)
+        try:
+            roster = [
+                f"{s.first_name} {s.last_name}".strip()
+                for s in storage.list_students(conn, classroom.id)
+            ]
+        finally:
+            conn.close()
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
 
     if not submitted or uploaded is None:
         return
-
-    roster = [line.strip() for line in roster_text.splitlines() if line.strip()]
 
     with tempfile.TemporaryDirectory() as tmp:
         scan_suffix = Path(uploaded.name).suffix or ".pdf"
@@ -306,15 +420,21 @@ def render_grade() -> None:
 
 def render_name_sheets() -> None:
     st.write(
-        "Paste a class roster (one student name per line) to generate a "
-        "printable PDF of name-collection worksheets — one page per student, "
-        "with their name printed at the top to copy into the practice grid."
+        "Select a class to generate a printable PDF of name-collection "
+        "worksheets — one page per student, with their name printed at the "
+        "top to copy into the practice grid."
     )
-    roster_text = st.text_area(
-        "Roster (one student name per line)",
-        placeholder="John Doe\nChristina Kim\nMike Meyers",
-    )
-    names = parse_roster(roster_text)
+    classroom = _select_classroom("names_classroom", allow_create=False)
+    names = []
+    if classroom is not None:
+        conn = storage.init_db(DB_PATH)
+        try:
+            names = [
+                f"{s.first_name} {s.last_name}".strip()
+                for s in storage.list_students(conn, classroom.id)
+            ]
+        finally:
+            conn.close()
     submitted = st.button(
         "Generate name worksheets", type="primary", disabled=not names
     )
@@ -351,8 +471,8 @@ def main() -> None:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
 
-    gallery_tab, create_tab, grade_tab, names_tab = st.tabs(
-        ["Gallery", "Create", "Grade", "Name sheets"]
+    gallery_tab, create_tab, grade_tab, names_tab, roster_tab = st.tabs(
+        ["Gallery", "Create", "Grade", "Name sheets", "Roster"]
     )
     with gallery_tab:
         render_gallery()
@@ -362,6 +482,8 @@ def main() -> None:
         render_grade()
     with names_tab:
         render_name_sheets()
+    with roster_tab:
+        render_roster()
 
 
 main()

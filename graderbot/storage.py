@@ -50,13 +50,43 @@ class WorksheetRecord:
 
 
 @dataclass
-class HandwritingSampleRecord:
+class ClassroomRecord:
+    """A group of students whose name-learning worksheets are ingested and
+    managed together (issue #43)."""
+    label: str
+    id: Optional[int] = None
+
+
+@dataclass
+class StudentRecord:
+    """One student enrolled in a `ClassroomRecord` (issue #43)."""
+    classroom_id: int
+    first_name: str
+    last_name: str
+    nickname: Optional[str] = None
+    id: Optional[int] = None
+
+
+@dataclass
+class NameImageRecord:
     """One handwriting sample cropped from a scanned name-collection sheet
-    (issue #2): the OCR'd printed name is the label, the crop lives in S3."""
-    student_name: str
+    (issue #2/#43): tied to a `StudentRecord`, the crop lives in S3."""
+    student_id: int
     box_id: str
     image_s3url: str
     image_sha256: str
+    created_at: Optional[str] = None
+    id: Optional[int] = None
+
+
+@dataclass
+class NameEmbeddingRecord:
+    """A vector embedding of one `NameImageRecord` (issue #46), stored as its
+    own S3 object. One row per name image (1:1), matching the KNN
+    classifier's need for one training vector per handwriting sample."""
+    student_id: int
+    name_image_id: int
+    embedding_s3url: str
     created_at: Optional[str] = None
     id: Optional[int] = None
 
@@ -114,18 +144,56 @@ def init_db(db_path: Path) -> Connection:
         )
         """
     )
-    # One row per handwriting sample cropped from a scanned name-collection
-    # sheet (issue #2), used to train a per-student name classifier. The crop
-    # itself lives in S3 (image_s3url); image_sha256 is the content hash used
-    # both as the S3 key and to dedupe identical crops on re-ingest.
+    # A class of students whose name-learning worksheets are managed together
+    # (issue #43).
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS HANDWRITING_SAMPLE (
+        CREATE TABLE IF NOT EXISTS CLASSROOM (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_name TEXT,
+            label TEXT NOT NULL UNIQUE,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS STUDENT (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            classroom_id INTEGER NOT NULL REFERENCES CLASSROOM(id),
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            nickname TEXT,
+            created_at TEXT,
+            UNIQUE(classroom_id, first_name, last_name)
+        )
+        """
+    )
+    # One row per handwriting sample cropped from a scanned name-collection
+    # sheet (issue #2/#43), used to train a per-student name classifier. The
+    # crop itself lives in S3 (image_s3url); image_sha256 is the content hash
+    # used both as the S3 key and to dedupe identical crops on re-ingest.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS NAME_IMAGES (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL REFERENCES STUDENT(id),
             box_id TEXT,
             image_s3url TEXT,
             image_sha256 TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    # A vector embedding of one NAME_IMAGES row (issue #46), stored as its own
+    # S3 object; name_image_id is UNIQUE so "already embedded" is a join, not a
+    # separate dedup index.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS NAME_EMBEDDINGS (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL REFERENCES STUDENT(id),
+            name_image_id INTEGER NOT NULL UNIQUE REFERENCES NAME_IMAGES(id),
+            embedding_s3url TEXT,
             created_at TEXT
         )
         """
@@ -199,19 +267,81 @@ def insert_mathpix_call(
     return cursor.lastrowid
 
 
-def insert_handwriting_sample(
-    conn: Connection, record: HandwritingSampleRecord
-) -> int:
-    """Records a single handwriting sample in the HANDWRITING_SAMPLE table
-    (issue #2) and returns the new row id."""
+def get_or_create_classroom(conn: Connection, label: str) -> ClassroomRecord:
+    """Looks up a CLASSROOM by its (unique) label, creating it if it doesn't
+    exist yet -- this is what gives the Roster tab's "new class or append to
+    an existing class" (issue #43) behaviour for free."""
+    conn.execute(
+        "INSERT OR IGNORE INTO CLASSROOM (label, created_at) VALUES (?, ?)",
+        (label, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, label FROM CLASSROOM WHERE label = ?", (label,)
+    ).fetchone()
+    return ClassroomRecord(id=row[0], label=row[1])
+
+
+def list_classrooms(conn: Connection) -> List[ClassroomRecord]:
+    rows = conn.execute("SELECT id, label FROM CLASSROOM ORDER BY label").fetchall()
+    return [ClassroomRecord(id=row[0], label=row[1]) for row in rows]
+
+
+def get_or_create_student(
+    conn: Connection,
+    classroom_id: int,
+    first_name: str,
+    last_name: str,
+    nickname: Optional[str] = None,
+) -> StudentRecord:
+    """Looks up a STUDENT by (classroom_id, first_name, last_name), creating
+    it if it doesn't exist yet."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO STUDENT
+            (classroom_id, first_name, last_name, nickname, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (classroom_id, first_name, last_name, nickname, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT id, classroom_id, first_name, last_name, nickname
+        FROM STUDENT WHERE classroom_id = ? AND first_name = ? AND last_name = ?
+        """,
+        (classroom_id, first_name, last_name),
+    ).fetchone()
+    return StudentRecord(
+        id=row[0], classroom_id=row[1], first_name=row[2], last_name=row[3], nickname=row[4]
+    )
+
+
+def list_students(conn: Connection, classroom_id: int) -> List[StudentRecord]:
+    rows = conn.execute(
+        """
+        SELECT id, classroom_id, first_name, last_name, nickname
+        FROM STUDENT WHERE classroom_id = ? ORDER BY first_name, last_name
+        """,
+        (classroom_id,),
+    ).fetchall()
+    return [
+        StudentRecord(id=row[0], classroom_id=row[1], first_name=row[2], last_name=row[3], nickname=row[4])
+        for row in rows
+    ]
+
+
+def insert_name_image(conn: Connection, record: NameImageRecord) -> int:
+    """Records a single handwriting sample in the NAME_IMAGES table
+    (issue #2/#43) and returns the new row id."""
     cursor = conn.execute(
         """
-        INSERT INTO HANDWRITING_SAMPLE
-            (student_name, box_id, image_s3url, image_sha256, created_at)
+        INSERT INTO NAME_IMAGES
+            (student_id, box_id, image_s3url, image_sha256, created_at)
         VALUES (?, ?, ?, ?, ?)
         """,
         (
-            record.student_name,
+            record.student_id,
             record.box_id,
             record.image_s3url,
             record.image_sha256,
@@ -222,25 +352,25 @@ def insert_handwriting_sample(
     return cursor.lastrowid
 
 
-def handwriting_sample_exists(conn: Connection, image_sha256: str) -> bool:
-    """Returns True if a HANDWRITING_SAMPLE row already stores the crop with
-    this content hash, so ingest can skip re-uploading duplicate samples."""
+def name_image_exists(conn: Connection, image_sha256: str) -> bool:
+    """Returns True if a NAME_IMAGES row already stores the crop with this
+    content hash, so ingest can skip re-uploading duplicate samples."""
     row = conn.execute(
-        "SELECT 1 FROM HANDWRITING_SAMPLE WHERE image_sha256 = ? LIMIT 1",
+        "SELECT 1 FROM NAME_IMAGES WHERE image_sha256 = ? LIMIT 1",
         (image_sha256,),
     ).fetchone()
     return row is not None
 
 
-_HANDWRITING_SAMPLE_COLUMNS = (
-    "id", "student_name", "box_id", "image_s3url", "image_sha256", "created_at",
+_NAME_IMAGE_COLUMNS = (
+    "id", "student_id", "box_id", "image_s3url", "image_sha256", "created_at",
 )
 
 
-def _row_to_handwriting_sample(row) -> HandwritingSampleRecord:
-    return HandwritingSampleRecord(
+def _row_to_name_image(row) -> NameImageRecord:
+    return NameImageRecord(
         id=row[0],
-        student_name=row[1],
+        student_id=row[1],
         box_id=row[2],
         image_s3url=row[3],
         image_sha256=row[4],
@@ -248,12 +378,77 @@ def _row_to_handwriting_sample(row) -> HandwritingSampleRecord:
     )
 
 
-def list_handwriting_samples(conn: Connection) -> List[HandwritingSampleRecord]:
+def list_name_images(conn: Connection, student_id: Optional[int] = None) -> List[NameImageRecord]:
+    if student_id is None:
+        rows = conn.execute(
+            f"SELECT {', '.join(_NAME_IMAGE_COLUMNS)} FROM NAME_IMAGES ORDER BY created_at"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {', '.join(_NAME_IMAGE_COLUMNS)} FROM NAME_IMAGES "
+            "WHERE student_id = ? ORDER BY created_at",
+            (student_id,),
+        ).fetchall()
+    return [_row_to_name_image(row) for row in rows]
+
+
+def list_unembedded_name_images(conn: Connection) -> List[NameImageRecord]:
+    """NAME_IMAGES rows with no matching NAME_EMBEDDINGS row yet, so
+    `vectorize_samples` can embed only what's new (idempotent re-runs)."""
     rows = conn.execute(
-        f"SELECT {', '.join(_HANDWRITING_SAMPLE_COLUMNS)} "
-        "FROM HANDWRITING_SAMPLE ORDER BY created_at"
+        f"""
+        SELECT {', '.join(f'ni.{c}' for c in _NAME_IMAGE_COLUMNS)}
+        FROM NAME_IMAGES ni
+        LEFT JOIN NAME_EMBEDDINGS ne ON ne.name_image_id = ni.id
+        WHERE ne.id IS NULL
+        ORDER BY ni.created_at
+        """
     ).fetchall()
-    return [_row_to_handwriting_sample(row) for row in rows]
+    return [_row_to_name_image(row) for row in rows]
+
+
+def insert_name_embedding(conn: Connection, record: NameEmbeddingRecord) -> int:
+    """Records a single embedding in the NAME_EMBEDDINGS table (issue #43/#46)
+    and returns the new row id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO NAME_EMBEDDINGS
+            (student_id, name_image_id, embedding_s3url, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (record.student_id, record.name_image_id, record.embedding_s3url, record.created_at),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def delete_student(conn: Connection, student_id: int, s3_client=None) -> None:
+    """Deletes a student's S3 blobs (every NAME_IMAGES/NAME_EMBEDDINGS object)
+    and DB rows. S3 deletes happen first and strictly: if any raises, the
+    error propagates and the DB rows are left intact, mirroring
+    `delete_worksheet`."""
+    image_urls = [
+        row[0]
+        for row in conn.execute(
+            "SELECT image_s3url FROM NAME_IMAGES WHERE student_id = ? AND image_s3url IS NOT NULL",
+            (student_id,),
+        ).fetchall()
+    ]
+    embedding_urls = [
+        row[0]
+        for row in conn.execute(
+            "SELECT embedding_s3url FROM NAME_EMBEDDINGS WHERE student_id = ? AND embedding_s3url IS NOT NULL",
+            (student_id,),
+        ).fetchall()
+    ]
+    for url in image_urls + embedding_urls:
+        img_bucket, key = parse_s3_url(url)
+        delete_from_s3(img_bucket, key, s3_client=s3_client)
+
+    conn.execute("DELETE FROM NAME_EMBEDDINGS WHERE student_id = ?", (student_id,))
+    conn.execute("DELETE FROM NAME_IMAGES WHERE student_id = ?", (student_id,))
+    conn.execute("DELETE FROM STUDENT WHERE id = ?", (student_id,))
+    conn.commit()
 
 
 # Column order shared by every WorksheetRecord SELECT, kept in sync with

@@ -12,15 +12,17 @@ The `Embedder` protocol keeps the embedding step swappable: `RemoteEmbedder`
 self-hosted model, without touching ingest, training, or the collection
 format.
 
-`vectorize_samples` embeds any HANDWRITING_SAMPLE crops not already vectorized
-and appends them to a single `.npz` collection on S3 (vectors + labels + the
-source sha256s, which key the append so re-running is idempotent).
+`vectorize_samples` embeds any NAME_IMAGES crops not already vectorized
+(issue #43) and uploads each vector to its own `.npy` object on S3, recording
+a NAME_EMBEDDINGS row per image -- one row/object per image, matching the KNN
+classifier's need for one training vector per handwriting sample.
 """
 
 import base64
 import io
 import os
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Protocol, Tuple
 
@@ -29,11 +31,16 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
-from graderbot.storage import init_db, list_handwriting_samples, parse_s3_url
+from graderbot.storage import (
+    NameEmbeddingRecord,
+    init_db,
+    insert_name_embedding,
+    list_unembedded_name_images,
+    parse_s3_url,
+)
 
 load_dotenv()
 
-DEFAULT_COLLECTION_KEY = "name_vectors/collection.npz"
 _VOYAGE_MULTIMODAL_URL = "https://api.voyageai.com/v1/multimodalembeddings"
 _VOYAGE_MODEL = "voyage-multimodal-3"
 
@@ -131,25 +138,6 @@ def _default_client(s3_client):
     return storage._default_s3_client()
 
 
-def load_vector_collection(
-    bucket: str, key: str = DEFAULT_COLLECTION_KEY, s3_client=None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load the `(vectors, labels, shas)` collection stored at `key`, or three
-    empty arrays if it does not exist yet. `vectors` is `(n, d)` float32;
-    `labels` and `shas` are `(n,)` unicode arrays."""
-    client = _default_client(s3_client)
-    try:
-        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
-    except Exception:  # noqa: BLE001 - a missing collection is the first-run case
-        return (
-            np.empty((0, 0), dtype=np.float32),
-            np.empty((0,), dtype="<U1"),
-            np.empty((0,), dtype="<U64"),
-        )
-    with np.load(io.BytesIO(body), allow_pickle=False) as data:
-        return data["vectors"], data["labels"], data["shas"]
-
-
 def _download_image_rgb(image_s3url: str, client) -> np.ndarray:
     bucket, key = parse_s3_url(image_s3url)
     body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -159,20 +147,59 @@ def _download_image_rgb(image_s3url: str, client) -> np.ndarray:
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
+def _embedding_key(student_id: int, name_image_id: int) -> str:
+    return f"name_embeddings/{student_id}/{name_image_id}.npy"
+
+
+def _download_vector(embedding_s3url: str, client) -> np.ndarray:
+    bucket, key = parse_s3_url(embedding_s3url)
+    body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    return np.load(io.BytesIO(body), allow_pickle=False)
+
+
+def load_training_vectors(
+    db_path: Path, bucket: Optional[str] = None, s3_client=None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load every NAME_EMBEDDINGS row's vector from S3. Returns `(vectors,
+    student_ids, name_image_ids)`: `vectors` is `(n, d)` float32,
+    `student_ids`/`name_image_ids` are `(n,)` int arrays. This is the KNN
+    classifier's training data source (issue #43)."""
+    bucket = _resolve_bucket(bucket)
+    client = _default_client(s3_client)
+    conn = init_db(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT student_id, name_image_id, embedding_s3url FROM NAME_EMBEDDINGS"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return (
+            np.empty((0, 0), dtype=np.float32),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0,), dtype=np.int64),
+        )
+
+    vectors = np.stack([_download_vector(row[2], client) for row in rows]).astype(np.float32)
+    student_ids = np.array([row[0] for row in rows], dtype=np.int64)
+    name_image_ids = np.array([row[1] for row in rows], dtype=np.int64)
+    return vectors, student_ids, name_image_ids
+
+
 def vectorize_samples(
     db_path: Path,
     bucket: Optional[str] = None,
     embedder: Optional[Embedder] = None,
-    key: str = DEFAULT_COLLECTION_KEY,
     s3_client=None,
 ) -> int:
-    """Embed every HANDWRITING_SAMPLE crop not already in the collection and
-    append them to the `.npz` collection at `key` on S3. Returns the number of
-    newly vectorized samples.
+    """Embed every NAME_IMAGES crop without a NAME_EMBEDDINGS row yet, upload
+    each vector to its own `.npy` object on S3, and insert a NAME_EMBEDDINGS
+    row. Returns the number of newly vectorized images.
 
-    Existing vectors are preserved and samples are keyed by their source
-    sha256, so re-running only embeds new crops (idempotent). No-ops (returns
-    0) if no S3 bucket is configured.
+    Idempotent via NAME_EMBEDDINGS.name_image_id (unique), checked through
+    `list_unembedded_name_images`. No-ops (returns 0) if no S3 bucket is
+    configured.
     """
     bucket = _resolve_bucket(bucket)
     if not bucket:
@@ -182,34 +209,30 @@ def vectorize_samples(
     embedder = embedder if embedder is not None else LocalEmbedder()
     client = _default_client(s3_client)
 
-    vectors, labels, shas = load_vector_collection(bucket, key, client)
-    known = set(shas.tolist())
-
     conn = init_db(db_path)
     try:
-        samples = list_handwriting_samples(conn)
+        unembedded = list_unembedded_name_images(conn)
+        if not unembedded:
+            return 0
+
+        images = [_download_image_rgb(image.image_s3url, client) for image in unembedded]
+        vectors = embedder.embed(images)
+
+        for image, vector in zip(unembedded, vectors):
+            key = _embedding_key(image.student_id, image.id)
+            buffer = io.BytesIO()
+            np.save(buffer, vector)
+            client.put_object(Bucket=bucket, Key=key, Body=buffer.getvalue())
+            insert_name_embedding(
+                conn,
+                NameEmbeddingRecord(
+                    student_id=image.student_id,
+                    name_image_id=image.id,
+                    embedding_s3url=f"https://{bucket}.s3.amazonaws.com/{key}",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                ),
+            )
     finally:
         conn.close()
 
-    new_images, new_labels, new_shas = [], [], []
-    for sample in samples:
-        if sample.image_sha256 in known:
-            continue
-        new_images.append(_download_image_rgb(sample.image_s3url, client))
-        new_labels.append(sample.student_name)
-        new_shas.append(sample.image_sha256)
-        known.add(sample.image_sha256)
-
-    if not new_images:
-        return 0
-
-    new_vectors = embedder.embed(new_images)
-    vectors = new_vectors if vectors.size == 0 else np.vstack([vectors, new_vectors])
-    labels = np.concatenate([labels, np.array(new_labels)])
-    shas = np.concatenate([shas, np.array(new_shas)])
-
-    buffer = io.BytesIO()
-    np.savez(buffer, vectors=vectors, labels=labels, shas=shas)
-    client.put_object(Bucket=bucket, Key=key, Body=buffer.getvalue())
-
-    return len(new_images)
+    return len(unembedded)

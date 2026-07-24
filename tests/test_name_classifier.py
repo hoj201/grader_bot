@@ -12,8 +12,17 @@ from graderbot.name_classifier import (
     DEFAULT_CLASSIFIER_KEY,
     load_classifier,
     save_classifier,
-    train_from_collection,
+    train_from_db,
     train_name_classifier,
+)
+from graderbot.storage import (
+    NameEmbeddingRecord,
+    NameImageRecord,
+    get_or_create_classroom,
+    get_or_create_student,
+    init_db,
+    insert_name_embedding,
+    insert_name_image,
 )
 
 BUCKET = "grader-handwriting"
@@ -70,17 +79,42 @@ def test_save_and_load_classifier_round_trip(tmp_path):
 
 
 @mock_aws
-def test_train_from_collection(tmp_path):
+def test_train_from_db(tmp_path):
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    zeke = get_or_create_student(conn, classroom.id, "Zeke", "Jones")
 
-    # Store a vector collection the way embedding.vectorize_samples would.
+    # Store per-image vectors/rows the way embedding.vectorize_samples would.
     vectors, labels = _labelled_vectors()
-    shas = np.array([f"sha{i}" for i in range(len(labels))])
-    buffer = io.BytesIO()
-    np.savez(buffer, vectors=vectors, labels=labels, shas=shas)
-    s3.put_object(Bucket=BUCKET, Key="name_vectors/collection.npz", Body=buffer.getvalue())
+    for i, (vector, label) in enumerate(zip(vectors, labels)):
+        student = anna if label == "Anna" else zeke
+        image_id = insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=student.id,
+                box_id="name1",
+                image_s3url=f"https://{BUCKET}.s3.amazonaws.com/img{i}.png",
+                image_sha256=f"sha{i}",
+            ),
+        )
+        key = f"name_embeddings/{student.id}/{image_id}.npy"
+        buffer = io.BytesIO()
+        np.save(buffer, vector)
+        s3.put_object(Bucket=BUCKET, Key=key, Body=buffer.getvalue())
+        insert_name_embedding(
+            conn,
+            NameEmbeddingRecord(
+                student_id=student.id,
+                name_image_id=image_id,
+                embedding_s3url=f"https://{BUCKET}.s3.amazonaws.com/{key}",
+            ),
+        )
+    conn.close()
 
-    clf = train_from_collection(BUCKET, s3_client=s3)
-    assert set(clf.classes_) == {"Anna", "Zeke"}
+    clf = train_from_db(db_path, BUCKET, s3_client=s3)
+    assert set(clf.classes_.tolist()) == {anna.id, zeke.id}
     assert DEFAULT_CLASSIFIER_KEY  # sanity: constant exists

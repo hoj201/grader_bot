@@ -10,20 +10,32 @@ from moto import mock_aws
 
 from graderbot.models import Box
 from graderbot.storage import (
+    NameEmbeddingRecord,
+    NameImageRecord,
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
     delete_from_s3,
+    delete_student,
     delete_worksheet,
     deserialize_boxes,
     generate_answer_key_pdf,
     generate_presigned_url,
+    get_or_create_classroom,
+    get_or_create_student,
     get_worksheet_by_public_id,
     image_to_pdf,
     images_to_pdf,
     init_db,
+    insert_name_embedding,
+    insert_name_image,
     insert_worksheet,
+    list_classrooms,
+    list_name_images,
+    list_students,
+    list_unembedded_name_images,
     list_worksheets,
+    name_image_exists,
     parse_s3_url,
     record_sty_version,
     serialize_boxes,
@@ -221,19 +233,43 @@ def test_init_db_creates_sty_version_table(tmp_path):
     assert columns == {"hash", "content", "created_at"}
 
 
-def test_init_db_creates_handwriting_sample_table(tmp_path):
+def test_init_db_creates_classroom_table(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
 
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(HANDWRITING_SAMPLE)")}
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(CLASSROOM)")}
+
+    assert columns == {"id", "label", "created_at"}
+
+
+def test_init_db_creates_student_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(STUDENT)")}
+
+    assert columns == {"id", "classroom_id", "first_name", "last_name", "nickname", "created_at"}
+
+
+def test_init_db_creates_name_images_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(NAME_IMAGES)")}
 
     assert columns == {
         "id",
-        "student_name",
+        "student_id",
         "box_id",
         "image_s3url",
         "image_sha256",
         "created_at",
     }
+
+
+def test_init_db_creates_name_embeddings_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(NAME_EMBEDDINGS)")}
+
+    assert columns == {"id", "student_id", "name_image_id", "embedding_s3url", "created_at"}
 
 
 def test_insert_worksheet_returns_id_and_persists_row(tmp_path):
@@ -838,3 +874,153 @@ def test_delete_worksheet_aborts_and_keeps_row_when_s3_delete_fails(tmp_path):
 
     # Strict: the row must survive when an S3 delete fails.
     assert [r.id for r in list_worksheets(conn)] == [record.id]
+
+
+# --------------------------------------------------------------------------
+# CLASSROOM / STUDENT / NAME_IMAGES / NAME_EMBEDDINGS (issue #43)
+# --------------------------------------------------------------------------
+
+def test_get_or_create_classroom_is_idempotent(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    first = get_or_create_classroom(conn, "Room 101")
+    second = get_or_create_classroom(conn, "Room 101")
+
+    assert first.id == second.id
+    assert [c.label for c in list_classrooms(conn)] == ["Room 101"]
+
+
+def test_get_or_create_student_is_idempotent(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+
+    first = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    second = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+
+    assert first.id == second.id
+    assert len(list_students(conn, classroom.id)) == 1
+
+
+def test_list_students_scoped_to_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    get_or_create_student(conn, room_b.id, "Zeke", "Jones")
+
+    names = [(s.first_name, s.last_name) for s in list_students(conn, room_a.id)]
+    assert names == [("Anna", "Smith")]
+
+
+def test_insert_name_image_and_exists(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+
+    assert not name_image_exists(conn, "sha123")
+
+    record = NameImageRecord(
+        student_id=student.id,
+        box_id="name1",
+        image_s3url="https://bucket.s3.amazonaws.com/handwriting/1/1/sha123.png",
+        image_sha256="sha123",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    insert_name_image(conn, record)
+
+    assert name_image_exists(conn, "sha123")
+    assert len(list_name_images(conn, student.id)) == 1
+
+
+def test_list_unembedded_name_images_excludes_embedded(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    image_id = insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student.id,
+            box_id="name1",
+            image_s3url="https://bucket.s3.amazonaws.com/img.png",
+            image_sha256="sha123",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert len(list_unembedded_name_images(conn)) == 1
+
+    insert_name_embedding(
+        conn,
+        NameEmbeddingRecord(
+            student_id=student.id,
+            name_image_id=image_id,
+            embedding_s3url="https://bucket.s3.amazonaws.com/vec.npy",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert list_unembedded_name_images(conn) == []
+
+
+@mock_aws
+def test_delete_student_removes_blobs_and_rows(tmp_path):
+    bucket = "graderbot-test-bucket"
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket=bucket)
+    s3_client.put_object(Bucket=bucket, Key="img.png", Body=b"png")
+    s3_client.put_object(Bucket=bucket, Key="vec.npy", Body=b"vec")
+
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    image_id = insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student.id,
+            box_id="name1",
+            image_s3url=f"https://{bucket}.s3.amazonaws.com/img.png",
+            image_sha256="sha123",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_name_embedding(
+        conn,
+        NameEmbeddingRecord(
+            student_id=student.id,
+            name_image_id=image_id,
+            embedding_s3url=f"https://{bucket}.s3.amazonaws.com/vec.npy",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    delete_student(conn, student.id, s3_client=s3_client)
+
+    assert list_students(conn, classroom.id) == []
+    assert list_name_images(conn) == []
+    for key in ("img.png", "vec.npy"):
+        with pytest.raises(s3_client.exceptions.NoSuchKey):
+            s3_client.get_object(Bucket=bucket, Key=key)
+
+
+def test_delete_student_aborts_and_keeps_rows_when_s3_delete_fails(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student.id,
+            box_id="name1",
+            image_s3url="https://bucket.s3.amazonaws.com/img.png",
+            image_sha256="sha123",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    with patch("graderbot.storage.delete_from_s3", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            delete_student(conn, student.id, s3_client=object())
+
+    # Strict: rows must survive when an S3 delete fails.
+    assert len(list_students(conn, classroom.id)) == 1
+    assert len(list_name_images(conn)) == 1

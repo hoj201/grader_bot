@@ -8,13 +8,14 @@ stored in S3 at a caller-chosen key so grading can fetch it later.
 """
 
 import io
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
 import joblib
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
 
-from graderbot.embedding import DEFAULT_COLLECTION_KEY, load_vector_collection
+from graderbot.embedding import load_training_vectors
 
 DEFAULT_CLASSIFIER_KEY = "name_classifier/knn.joblib"
 _DEFAULT_N_NEIGHBORS = 3
@@ -23,7 +24,7 @@ _DEFAULT_N_NEIGHBORS = 3
 def train_name_classifier(
     vectors: np.ndarray, labels: np.ndarray, n_neighbors: int = _DEFAULT_N_NEIGHBORS
 ) -> KNeighborsClassifier:
-    """Fit a KNN classifier mapping embedding vectors to student names. `k` is
+    """Fit a KNN classifier mapping embedding vectors to student ids. `k` is
     clamped to the number of samples so tiny datasets still train."""
     if len(vectors) == 0:
         raise ValueError("cannot train a classifier on an empty vector collection")
@@ -33,15 +34,16 @@ def train_name_classifier(
     return classifier
 
 
-def train_from_collection(
+def train_from_db(
+    db_path: Union[str, Path],
     bucket: str,
-    collection_key: str = DEFAULT_COLLECTION_KEY,
     n_neighbors: int = _DEFAULT_N_NEIGHBORS,
     s3_client=None,
 ) -> KNeighborsClassifier:
-    """Load the vector collection from S3 and train a classifier on it."""
-    vectors, labels, _ = load_vector_collection(bucket, collection_key, s3_client)
-    return train_name_classifier(vectors, labels, n_neighbors)
+    """Load per-image embeddings from NAME_EMBEDDINGS (issue #43) and train a
+    classifier keyed by student_id."""
+    vectors, student_ids, _ = load_training_vectors(Path(db_path), bucket, s3_client)
+    return train_name_classifier(vectors, student_ids, n_neighbors)
 
 
 def _default_client(s3_client):
