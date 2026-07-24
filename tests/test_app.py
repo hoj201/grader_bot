@@ -1,5 +1,8 @@
+import logging
 from pathlib import Path
 
+import boto3
+from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
 from graderbot import scan_grader, storage
@@ -207,6 +210,75 @@ def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
     assert "Questions JSON" in text_area_labels
     button_labels = [b.label for b in at.button]
     assert "Create from JSON" in button_labels
+
+
+def test_logging_is_configured_with_default_level(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    assert logging.getLogger("graderbot.app").getEffectiveLevel() == logging.INFO
+
+
+def test_create_from_json_logs_created_worksheet(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    def fake_create(questions_json, template_path, out, title, header="", bucket=None,
+                     db_path=None, on_step=None):
+        record = storage.WorksheetRecord(
+            id=1,
+            prompt=title,
+            tex_source=r"\documentclass{article}",
+            questions_json=questions_json,
+            model="manual",
+            num_questions=1,
+            title=title,
+            created_at="2026-07-18T00:00:00+00:00",
+        )
+        return Path("unused.pdf"), [], record
+
+    monkeypatch.setattr("graderbot.worksheetbot.create_worksheet_from_questions", fake_create)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.text_area(key="manual_questions_json").set_value(
+        '[{"id": "1", "text": "$2+2=$", "answer": "4"}]'
+    )
+    at.text_input(key="manual_title").set_value("Test Worksheet")
+    at.run()
+
+    with caplog.at_level(logging.INFO, logger="graderbot.app"):
+        button = next(b for b in at.button if b.label == "Create from JSON")
+        button.click().run()
+
+    assert not at.exception
+    assert any("created worksheet id=1" in r.message for r in caplog.records)
+
+
+@mock_aws
+def test_delete_worksheet_logs_deletion(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _seed_worksheet(db_path)
+    _set_env(monkeypatch, db_path)
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="bucket")
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    ask_button = next(b for b in at.button if b.key and b.key.startswith("ask_delete_"))
+    ask_button.click().run()
+
+    with caplog.at_level(logging.INFO, logger="graderbot.app"):
+        confirm_button = next(b for b in at.button if b.key and b.key.startswith("do_delete_"))
+        confirm_button.click().run()
+
+    assert not at.exception
+    assert any("deleted worksheet id=" in r.message for r in caplog.records)
 
 
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):

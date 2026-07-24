@@ -179,3 +179,11 @@ We currently deploy to fly.io at the url https://grader-bot.fly.dev
 Deployment is automated: every push to the `main` branch triggers a deploy to
 fly.io. To deploy, merge/push your changes to `main`. (You can still deploy
 manually with `fly deploy` if needed.)
+
+### Viewing logs
+`fly logs -a grader-bot` streams recent logs. The app's own log lines are
+prefixed `graderbot.app`; set `LOG_LEVEL=DEBUG` (fly secrets/env) for more
+verbosity. Note the machine auto-suspends when idle (`auto_stop_machines`,
+`min_machines_running = 0` in `fly.toml`), so live-tailing shows nothing until
+a request wakes it — hit https://grader-bot.fly.dev first, or use `fly logs`
+right after a deploy triggers a fresh machine start.

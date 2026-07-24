@@ -7,6 +7,7 @@ Requires ANTHROPIC_API_KEY, S3_BUCKET, and AWS credentials in the
 environment (see README.md).
 """
 
+import logging
 import os
 import subprocess
 import tempfile
@@ -30,6 +31,14 @@ from graderbot.worksheetbot import (
 )
 
 load_dotenv()
+
+# Route warnings.warn(...) (e.g. the ingest skip reasons from name_dataset.py)
+# through logging too, and make sure app.py's own log lines actually reach
+# fly.io's log capture (issue #52 -- previously app.py logged nothing).
+logging.captureWarnings(True)
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("graderbot.app")
+logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 _TEX_DIR = Path(__file__).resolve().parent.parent / "tex"
 TEMPLATE_PATH = Path(
@@ -115,6 +124,10 @@ def render_roster() -> None:
                     st.write(f"Skipped {reason}")
                 status.update(label="Done", state="complete")
 
+        logger.info(
+            "ingest_name_sheets classroom=%s ingested=%d skipped=%d",
+            classroom.id, len(result.records), len(result.skipped),
+        )
         st.success(f"Ingested {len(result.records)} handwriting sample(s).")
         if result.skipped:
             st.warning(
@@ -155,6 +168,9 @@ def render_roster() -> None:
                             storage.delete_student(conn, student.id)
                         finally:
                             conn.close()
+                        logger.info(
+                            "deleted student id=%s classroom=%s", student.id, classroom.id
+                        )
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
                     if no.button("Cancel", key=f"cancel_delete_student_{student.id}",
@@ -209,6 +225,7 @@ def render_gallery() -> None:
                     if yes.button("Confirm delete", key=f"do_delete_{record.id}",
                                   type="primary", use_container_width=True):
                         _delete_worksheet(record)
+                        logger.info("deleted worksheet id=%s", record.id)
                         st.session_state.pop(confirm_key, None)
                         st.rerun()
                     if no.button("Cancel", key=f"cancel_delete_{record.id}",
@@ -276,12 +293,16 @@ def _render_create_ai() -> None:
                 on_step=on_step,
             )
         except CompileError as e:
+            logger.error("worksheet compile failed (AI): %s", e.log_tail)
             status.update(label="Compilation failed", state="error")
             st.error(f"LaTeX compilation failed after repair attempts:\n\n{e.log_tail}")
             return
 
         status.update(label="Done", state="complete")
 
+    logger.info(
+        "created worksheet id=%s model=%s num_questions=%s", record.id, model, num_questions
+    )
     st.success(f"Created worksheet id={record.id}")
     st.rerun()
 
@@ -337,16 +358,19 @@ def _render_create_from_json() -> None:
                 on_step=on_step,
             )
         except ValueError as e:
+            logger.error("invalid questions JSON: %s", e)
             status.update(label="Invalid questions JSON", state="error")
             st.error(str(e))
             return
         except CompileError as e:
+            logger.error("worksheet compile failed (JSON): %s", e.log_tail)
             status.update(label="Compilation failed", state="error")
             st.error(f"LaTeX compilation failed:\n\n{e.log_tail}")
             return
 
         status.update(label="Done", state="complete")
 
+    logger.info("created worksheet id=%s (from JSON)", record.id)
     st.success(f"Created worksheet id={record.id}")
     st.rerun()
 
@@ -393,6 +417,7 @@ def render_grade() -> None:
         scan_path = Path(tmp) / f"scan{scan_suffix}"
         scan_path.write_bytes(uploaded.getvalue())
         marked_path = Path(tmp) / "marked.pdf"
+        logger.info("grading scan filename=%s", uploaded.name)
 
         with st.status("Grading...", expanded=True) as status:
             def on_step(msg: str, detail: str | None = None) -> None:
@@ -407,6 +432,10 @@ def render_grade() -> None:
             status.update(label="Grading complete", state="complete")
 
         graded = _display_results(result)
+        logger.info(
+            "graded students=%d unreadable=%d unknown_worksheets=%d",
+            len(graded), len(result.unreadable), len(result.unknown_worksheets),
+        )
         if not graded:
             st.warning("No pages could be graded from this PDF.")
         else:
@@ -456,11 +485,13 @@ def render_name_sheets() -> None:
                 generate_name_worksheets(names, out_path)
                 pdf_bytes = out_path.read_bytes()
         except subprocess.CalledProcessError as e:
+            logger.error("name worksheet generation failed: %s", e)
             status.update(label="Compilation failed", state="error")
             st.error(f"LaTeX compilation failed:\n\n{e}")
             return
         status.update(label="Done", state="complete")
 
+    logger.info("generated %d name worksheet(s) classroom=%s", len(names), classroom.id)
     st.success(f"Generated {len(names)} name worksheet(s).")
     st.download_button(
         "Download name worksheets PDF",
