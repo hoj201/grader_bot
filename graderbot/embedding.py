@@ -126,6 +126,64 @@ class RemoteEmbedder:
         return np.divide(vectors, norms, out=vectors, where=norms > 0)
 
 
+def augment_image(
+    image: np.ndarray,
+    rng: np.random.Generator,
+    max_rotation_deg: float = 6.0,
+    max_shift_frac: float = 0.06,
+    max_scale_frac: float = 0.06,
+) -> np.ndarray:
+    """Apply a small random rotation/translation/scale to `image`, simulating
+    natural handwriting variation for classifier data augmentation (issue
+    #56). Border fill matches blank paper (white)."""
+    height, width = image.shape[:2]
+    angle = rng.uniform(-max_rotation_deg, max_rotation_deg)
+    scale = 1.0 + rng.uniform(-max_scale_frac, max_scale_frac)
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, scale)
+    matrix[0, 2] += rng.uniform(-max_shift_frac, max_shift_frac) * width
+    matrix[1, 2] += rng.uniform(-max_shift_frac, max_shift_frac) * height
+    border_value = (255, 255, 255) if image.ndim == 3 else 255
+    return cv2.warpAffine(
+        image, matrix, (width, height), borderValue=border_value, flags=cv2.INTER_LINEAR
+    )
+
+
+def augment_images(
+    images: List[np.ndarray], rng: np.random.Generator, n_augmentations: int = 4, **kwargs
+) -> List[np.ndarray]:
+    """Generate `n_augmentations` distorted copies of each image in `images`
+    (issue #56). Returns a flat list of length `len(images) * n_augmentations`."""
+    return [
+        augment_image(image, rng, **kwargs) for image in images for _ in range(n_augmentations)
+    ]
+
+
+def load_training_images(
+    db_path: Path, bucket: Optional[str] = None, s3_client=None
+) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray]:
+    """Load every NAME_IMAGES row's raw RGB crop from S3. Returns `(images,
+    student_ids, name_image_ids)`, mirroring `load_training_vectors` but with
+    undecoded images instead of pre-computed vectors -- needed to re-embed
+    augmented copies on the fly (issue #56)."""
+    bucket = _resolve_bucket(bucket)
+    client = _default_client(s3_client)
+    conn = init_db(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT student_id, id, image_s3url FROM NAME_IMAGES"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return [], np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
+
+    images = [_download_image_rgb(row[2], client) for row in rows]
+    student_ids = np.array([row[0] for row in rows], dtype=np.int64)
+    name_image_ids = np.array([row[1] for row in rows], dtype=np.int64)
+    return images, student_ids, name_image_ids
+
+
 def _resolve_bucket(bucket: Optional[str]) -> Optional[str]:
     return bucket or os.environ.get("S3_BUCKET")
 

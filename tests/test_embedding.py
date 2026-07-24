@@ -13,6 +13,9 @@ from moto import mock_aws
 from graderbot.embedding import (
     LocalEmbedder,
     RemoteEmbedder,
+    augment_image,
+    augment_images,
+    load_training_images,
     load_training_vectors,
     vectorize_samples,
 )
@@ -185,3 +188,63 @@ def test_load_training_vectors_missing_returns_empty(tmp_path):
         s3.create_bucket(Bucket=BUCKET)
         vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0
+
+
+def test_augment_image_preserves_shape_and_dtype():
+    image = _crop_with_text("Anna")
+    rng = np.random.default_rng(0)
+    distorted = augment_image(image, rng)
+    assert distorted.shape == image.shape
+    assert distorted.dtype == image.dtype
+
+
+def test_augment_image_perturbs_pixels():
+    image = _crop_with_text("Anna")
+    rng = np.random.default_rng(0)
+    distorted = augment_image(image, rng)
+    assert not np.array_equal(distorted, image)
+
+
+def test_augment_image_is_seed_reproducible():
+    image = _crop_with_text("Anna")
+    a = augment_image(image, np.random.default_rng(42))
+    b = augment_image(image, np.random.default_rng(42))
+    np.testing.assert_array_equal(a, b)
+
+
+def test_augment_images_returns_n_augmentations_per_image():
+    images = [_crop_with_text("Anna"), _crop_with_text("Zeke")]
+    rng = np.random.default_rng(0)
+    augmented = augment_images(images, rng, n_augmentations=3)
+    assert len(augmented) == 6
+    for image in augmented:
+        assert image.shape == images[0].shape
+
+
+@mock_aws
+def test_load_training_images_from_db(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna_id = _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
+    zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
+    conn.close()
+
+    images, student_ids, name_image_ids = load_training_images(db_path, BUCKET, s3_client=s3)
+    assert len(images) == 2
+    assert all(isinstance(image, np.ndarray) and image.ndim == 3 for image in images)
+    assert set(student_ids.tolist()) == {anna_id, zeke_id}
+    assert len(name_image_ids) == 2
+
+
+def test_load_training_images_missing_returns_empty(tmp_path):
+    db_path = tmp_path / "db.sqlite3"
+    init_db(db_path).close()
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=BUCKET)
+        images, student_ids, name_image_ids = load_training_images(db_path, BUCKET, s3_client=s3)
+    assert images == []
+    assert student_ids.size == 0 and name_image_ids.size == 0
