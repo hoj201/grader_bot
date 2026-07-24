@@ -43,6 +43,7 @@ AVAILABLE_MODELS = ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"]
 MODEL = AVAILABLE_MODELS[0]
 QUESTIONS_MARKER = "%%QUESTIONS%%"
 WORKSHEET_ID_MARKER = "%%WORKSHEET_ID%%"
+TITLE_BLOCK_MARKER = "%%TITLE_BLOCK%%"
 
 OnStep = Callable[[str, Optional[str]], None]
 
@@ -64,6 +65,17 @@ class Question:
     id: str
     text: str
     answer: str
+
+
+@dataclass
+class WorksheetDocument:
+    """A worksheet's full body content (issue #42): a title, a free-text
+    header/instructions paragraph, and its questions. Assembled by
+    `generate_worksheet`/`create_worksheet_from_questions` before rendering,
+    so title and header are always resolved by the time the LaTeX is built."""
+    title: str
+    header: str
+    questions: "list[Question]"
 
 
 # --------------------------------------------------------------------------
@@ -124,7 +136,10 @@ def generate_questions(
 
 TITLE_SYSTEM_PROMPT = """Generate a short, descriptive title (5-8 words) for
 a math worksheet based on the given prompt. Return ONLY the title text -
-no quotes, no markdown, no trailing punctuation, no commentary."""
+no quotes, no markdown, no trailing punctuation, no commentary. It is
+inserted into a LaTeX document verbatim (not escaped), so avoid characters
+with special meaning in LaTeX (%, &, #, _, {, }, ~, ^, \\) unless you intend
+them as LaTeX markup."""
 
 
 def generate_title(
@@ -144,6 +159,39 @@ def generate_title(
     title = raw.strip().strip('"')
     on_step(f"Title: {title}")
     return title
+
+
+HEADER_SYSTEM_PROMPT = """Generate a short paragraph (1-3 sentences) of
+instructions or advice for students working on this worksheet, based on the
+given prompt (e.g. reminders about formatting or notation, such as not using
+a forward slash for fractions). Return ONLY the instructions text - no
+quotes, no markdown, no commentary.
+
+It is inserted into a LaTeX document verbatim (not escaped), so:
+- Write real LaTeX math notation, delimited with $...$, when referring to a
+  formula or notation example (e.g. "write fractions as $\\frac{a}{b}$, not
+  a/b"), the same way worksheet questions do.
+- Escape any literal %, &, #, _, {, }, ~, ^, or \\ that isn't meant as LaTeX
+  markup (e.g. write \\% for a literal percent sign)."""
+
+
+def generate_header(
+    client: anthropic.Anthropic,
+    prompt: str,
+    model: str = MODEL,
+    on_step: OnStep = _print_step,
+) -> str:
+    on_step("Generating header...")
+    resp = client.messages.create(
+        model=model,
+        max_tokens=120,
+        system=HEADER_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = "".join(block.text for block in resp.content if block.type == "text")
+    header = raw.strip().strip('"')
+    on_step(f"Header: {header}")
+    return header
 
 
 _VALID_JSON_ESCAPE_RE = re.compile(r'\\u[0-9a-fA-F]{4}|\\["\\/]')
@@ -293,7 +341,11 @@ def _render_questions_grid(questions: list[Question], cols: int) -> str:
 
 
 def fill_template(
-    template_path: Path, questions_tex: str, worksheet_id: Optional[str] = None
+    template_path: Path,
+    questions_tex: str,
+    worksheet_id: Optional[str] = None,
+    title: Optional[str] = None,
+    header: Optional[str] = None,
 ) -> str:
     template = template_path.read_text()
     if QUESTIONS_MARKER not in template:
@@ -312,6 +364,17 @@ def fill_template(
         rf"\WorksheetSetup{{worksheet id={worksheet_id}}}" if worksheet_id else ""
     )
     filled = filled.replace(WORKSHEET_ID_MARKER, id_setup)
+
+    # Embed the title/instructions block (issue #42). Passed through
+    # unescaped, like question text -- the header commonly needs inline math
+    # (e.g. "write fractions as $\frac{a}{b}$"), so it's treated as
+    # hand-written LaTeX rather than escaped plain text. Empty when neither
+    # is given, so templates lacking the marker (or worksheets with no
+    # title/header) still compile.
+    title_block = ""
+    if title or header:
+        title_block = r"\WorksheetTitleBlock{%s}{%s}" % (title or "", header or "")
+    filled = filled.replace(TITLE_BLOCK_MARKER, title_block)
     return filled
 
 
@@ -387,6 +450,7 @@ def generate_worksheet(
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
     title: Optional[str] = None,
+    header: Optional[str] = None,
     model: str = MODEL,
     on_step: OnStep = _print_step,
 ) -> tuple[Path, list, "storage.WorksheetRecord"]:
@@ -395,10 +459,20 @@ def generate_worksheet(
     compilation still fails after `max_repairs` retries. Returns
     (tex_path, questions, record), where `record` is None if `bucket` is
     not given.
+
+    `title`/`header` are generated from the prompt when not given, same as
+    `generate_title` always did -- but now unconditionally (not just when
+    `bucket` is set), since both are rendered into the worksheet body itself
+    (issue #42), not only used for storage/filenames.
     """
     questions = generate_questions(client, prompt, num_questions, model=model, on_step=on_step)
+    if title is None:
+        title = generate_title(client, prompt, model=model, on_step=on_step)
+    if header is None:
+        header = generate_header(client, prompt, model=model, on_step=on_step)
+    document = WorksheetDocument(title=title, header=header, questions=questions)
     return build_worksheet(
-        questions,
+        document,
         template_path,
         out,
         max_repairs,
@@ -406,14 +480,13 @@ def generate_worksheet(
         bucket=bucket,
         db_path=db_path,
         prompt=prompt,
-        title=title,
         model=model,
         on_step=on_step,
     )
 
 
 def build_worksheet(
-    questions: "list[Question]",
+    document: "WorksheetDocument",
     template_path: Path,
     out: Path,
     max_repairs: int,
@@ -421,12 +494,11 @@ def build_worksheet(
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
     prompt: str = "",
-    title: Optional[str] = None,
     model: str = MODEL,
     on_step: OnStep = _print_step,
 ) -> tuple[Path, list, "storage.WorksheetRecord"]:
     """Runs the questions -> LaTeX -> compile (with repair retries) ->
-    optional S3/DB storage tail of the pipeline on a ready `list[Question]`.
+    optional S3/DB storage tail of the pipeline on a ready `WorksheetDocument`.
 
     Shared by the AI path (`generate_worksheet`) and the manual path
     (`create_worksheet_from_questions`). The compile/repair loop only asks the
@@ -435,9 +507,16 @@ def build_worksheet(
     failure without touching `client`. Returns (tex_path, questions, record),
     where `record` is None if `bucket` is not given.
     """
+    questions = document.questions
     public_id = generate_worksheet_id()
     questions_tex = render_questions(questions)
-    tex_source = fill_template(template_path, questions_tex, worksheet_id=public_id)
+    tex_source = fill_template(
+        template_path,
+        questions_tex,
+        worksheet_id=public_id,
+        title=document.title,
+        header=document.header,
+    )
 
     out = Path(out)
     out_dir = out.parent if out.parent != Path("") else Path(".")
@@ -457,8 +536,6 @@ def build_worksheet(
             on_step(f"Done: {tex_path.with_suffix('.pdf')}")
             record = None
             if bucket:
-                if not title:
-                    title = generate_title(client, prompt, model=model, on_step=on_step)
                 on_step(f"Uploading to s3://{bucket} and recording in {db_path}...")
                 record = storage.store_worksheet(
                     tex_path=tex_path,
@@ -467,7 +544,8 @@ def build_worksheet(
                     model=model,
                     bucket=bucket,
                     db_path=db_path,
-                    title=title,
+                    title=document.title,
+                    header=document.header,
                     public_id=public_id,
                 )
                 on_step(f"Stored worksheet id={record.id}")
@@ -520,6 +598,7 @@ def create_worksheet_from_questions(
     template_path: Path,
     out: Path,
     title: str,
+    header: str = "",
     bucket: str = None,
     db_path: Path = Path("worksheets.sqlite3"),
     on_step: OnStep = _print_step,
@@ -531,8 +610,9 @@ def create_worksheet_from_questions(
     if the LaTeX doesn't compile. The stored `model` is the literal "manual".
     """
     questions = parse_questions_json(questions_json)
+    document = WorksheetDocument(title=title, header=header, questions=questions)
     return build_worksheet(
-        questions,
+        document,
         template_path,
         out,
         max_repairs=0,
@@ -540,7 +620,6 @@ def create_worksheet_from_questions(
         bucket=bucket,
         db_path=db_path,
         prompt="",
-        title=title,
         model="manual",
         on_step=on_step,
     )
@@ -566,8 +645,17 @@ def main():
     parser.add_argument(
         "--title",
         default=None,
-        help="Worksheet title, used as a filename prefix and DB record. "
-        "Auto-generated from the prompt if not given (only when --bucket is set).",
+        help="Worksheet title, rendered on the page and used as a filename "
+        "prefix and DB record. Auto-generated from the prompt if not given.",
+    )
+    parser.add_argument(
+        "--header",
+        default=None,
+        help="Worksheet instructions/header paragraph, rendered on the page "
+        "below the title. Auto-generated from the prompt if not given. "
+        "Inserted into the LaTeX source as-is (like question text), so use "
+        "$...$ for inline math and escape any literal LaTeX special "
+        "characters.",
     )
     parser.add_argument("--save-json", action="store_true", help="Also save the raw question JSON")
     parser.add_argument(
@@ -597,6 +685,7 @@ def main():
             bucket=args.bucket,
             db_path=args.db_path,
             title=args.title,
+            header=args.header,
             model=args.model,
         )
     except CompileError as e:

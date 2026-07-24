@@ -10,10 +10,13 @@ from graderbot.worksheetbot import (
     MODEL,
     CompileError,
     Question,
+    WorksheetDocument,
     choose_grid_columns,
     create_worksheet_from_questions,
     escape_latex,
     estimate_question_width,
+    fill_template,
+    generate_header,
     generate_questions,
     generate_title,
     generate_worksheet,
@@ -135,7 +138,7 @@ def test_repair_tex_uses_explicit_model():
 
 def test_generate_worksheet_threads_model_through_generation_and_storage(tmp_path):
     client = _client_with_responses(
-        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title"
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title", "Auto Header"
     )
     template_path = _template(tmp_path)
     out = tmp_path / "worksheet"
@@ -191,6 +194,40 @@ def test_generate_title_sends_prompt_to_model():
 
     _, kwargs = client.messages.create.call_args
     assert kwargs["messages"][0]["content"] == "division worksheet"
+
+
+def test_generate_header_returns_stripped_text():
+    client = _fake_client("  Show all your work.  ")
+
+    header = generate_header(client, "algebra worksheet")
+
+    assert header == "Show all your work."
+
+
+def test_generate_header_strips_surrounding_quotes():
+    client = _fake_client('"Do not use a forward slash for fractions."')
+
+    header = generate_header(client, "fractions worksheet")
+
+    assert header == "Do not use a forward slash for fractions."
+
+
+def test_generate_header_sends_prompt_to_model():
+    client = _fake_client("Some header")
+
+    generate_header(client, "division worksheet")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["messages"][0]["content"] == "division worksheet"
+
+
+def test_generate_header_uses_explicit_model():
+    client = _fake_client("Some header")
+
+    generate_header(client, "algebra worksheet", model="claude-opus-4-8")
+
+    _, kwargs = client.messages.create.call_args
+    assert kwargs["model"] == "claude-opus-4-8"
 
 
 def test_escape_latex_escapes_special_characters():
@@ -300,6 +337,73 @@ def _template(tmp_path: Path) -> Path:
     return template_path
 
 
+# --------------------------------------------------------------------------
+# fill_template: title/header block (issue #42)
+# --------------------------------------------------------------------------
+
+def _titled_template(tmp_path: Path) -> Path:
+    template_path = tmp_path / "template.tex"
+    template_path.write_text("HEADER\n%%TITLE_BLOCK%%\n%%QUESTIONS%%\nFOOTER\n")
+    return template_path
+
+
+def test_fill_template_inserts_title_block_macro_call(tmp_path):
+    filled = fill_template(
+        _titled_template(tmp_path), "QUESTIONS", title="Fractions", header="Show your work."
+    )
+
+    assert r"\WorksheetTitleBlock{Fractions}{Show your work.}" in filled
+
+
+def test_fill_template_does_not_escape_title_and_header(tmp_path):
+    # Title/header are inserted verbatim, like question text, so inline math
+    # (e.g. a header explaining fraction notation) renders instead of being
+    # escaped into literal characters.
+    filled = fill_template(
+        _titled_template(tmp_path),
+        "QUESTIONS",
+        title="Fractions",
+        header=r"Write fractions as $\frac{a}{b}$, not a/b.",
+    )
+
+    assert r"\WorksheetTitleBlock{Fractions}{Write fractions as $\frac{a}{b}$, not a/b.}" in filled
+
+
+def test_fill_template_omits_title_block_when_neither_given(tmp_path):
+    filled = fill_template(_titled_template(tmp_path), "QUESTIONS")
+
+    assert "%%TITLE_BLOCK%%" not in filled
+    assert r"\WorksheetTitleBlock" not in filled
+
+
+def test_fill_template_renders_header_only_with_empty_title_arg(tmp_path):
+    filled = fill_template(_titled_template(tmp_path), "QUESTIONS", header="Show your work.")
+
+    assert r"\WorksheetTitleBlock{}{Show your work.}" in filled
+
+
+def test_fill_template_leaves_marker_untouched_when_template_lacks_it(tmp_path):
+    # Templates without %%TITLE_BLOCK%% (e.g. older ones) still compile;
+    # nothing to replace, so fill_template is a no-op for that marker.
+    filled = fill_template(_template(tmp_path), "QUESTIONS", title="Fractions")
+
+    assert r"\WorksheetTitleBlock" not in filled
+
+
+# --------------------------------------------------------------------------
+# WorksheetDocument
+# --------------------------------------------------------------------------
+
+def test_worksheet_document_holds_title_header_and_questions():
+    questions = [Question(id="1", text="$2+2=$", answer="4")]
+
+    document = WorksheetDocument(title="Fractions", header="Show your work.", questions=questions)
+
+    assert document.title == "Fractions"
+    assert document.header == "Show your work."
+    assert document.questions == questions
+
+
 def _questions_client() -> MagicMock:
     return _fake_client(json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]))
 
@@ -331,7 +435,7 @@ def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_
 
 def test_generate_worksheet_stores_when_bucket_given(tmp_path):
     client = _client_with_responses(
-        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title"
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title", "Auto Header"
     )
     template_path = _template(tmp_path)
     out = tmp_path / "worksheet"
@@ -365,6 +469,7 @@ def test_generate_worksheet_stores_when_bucket_given(tmp_path):
         bucket="my-bucket",
         db_path=db_path,
         title="Auto Title",
+        header="Auto Header",
         public_id=ANY,
     )
     assert record is fake_record
@@ -384,7 +489,11 @@ def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path)
 
     with patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")), patch(
         "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
-    ) as mock_store, patch("graderbot.worksheetbot.generate_title") as mock_generate_title:
+    ) as mock_store, patch(
+        "graderbot.worksheetbot.generate_title"
+    ) as mock_generate_title, patch(
+        "graderbot.worksheetbot.generate_header"
+    ) as mock_generate_header:
         generate_worksheet(
             client,
             template_path,
@@ -395,9 +504,11 @@ def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path)
             bucket="my-bucket",
             db_path=db_path,
             title="Given Title",
+            header="Given Header",
         )
 
     mock_generate_title.assert_not_called()
+    mock_generate_header.assert_not_called()
     mock_store.assert_called_once_with(
         tex_path=Path(out).with_suffix(".tex"),
         questions=[Question(id="1", text="1+1=?", answer="2")],
@@ -406,6 +517,7 @@ def test_generate_worksheet_uses_explicit_title_without_generating_one(tmp_path)
         bucket="my-bucket",
         db_path=db_path,
         title="Given Title",
+        header="Given Header",
         public_id=ANY,
     )
 
@@ -512,7 +624,13 @@ def test_create_worksheet_from_questions_stores_with_manual_model(tmp_path):
         "graderbot.worksheetbot.storage.store_worksheet", return_value=fake_record
     ) as mock_store:
         tex_path, questions, record = create_worksheet_from_questions(
-            raw, template_path, out, title="My Sheet", bucket="my-bucket", db_path=db_path
+            raw,
+            template_path,
+            out,
+            title="My Sheet",
+            header="Show your work.",
+            bucket="my-bucket",
+            db_path=db_path,
         )
 
     assert tex_path == out.with_suffix(".tex")
@@ -528,6 +646,7 @@ def test_create_worksheet_from_questions_stores_with_manual_model(tmp_path):
         bucket="my-bucket",
         db_path=db_path,
         title="My Sheet",
+        header="Show your work.",
         public_id=ANY,
     )
 

@@ -38,6 +38,7 @@ class WorksheetRecord:
     model: str
     num_questions: int
     title: Optional[str] = None
+    header: Optional[str] = None
     public_id: Optional[str] = None
     boxes_json: Optional[str] = None
     student_pdf_s3url: Optional[str] = None
@@ -77,6 +78,7 @@ def init_db(db_path: Path) -> Connection:
             model TEXT,
             num_questions INTEGER,
             title TEXT,
+            header TEXT,
             public_id TEXT,
             boxes_json TEXT,
             student_pdf_s3url TEXT,
@@ -135,6 +137,8 @@ def init_db(db_path: Path) -> Connection:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN sty_hash TEXT")
     if "title" not in columns:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN title TEXT")
+    if "header" not in columns:
+        conn.execute("ALTER TABLE WORKSHEET ADD COLUMN header TEXT")
     if "public_id" not in columns:
         conn.execute("ALTER TABLE WORKSHEET ADD COLUMN public_id TEXT")
     if "boxes_json" not in columns:
@@ -148,9 +152,9 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
         """
         INSERT INTO WORKSHEET
             (prompt, tex_source, questions_json, model, num_questions, title,
-             public_id, boxes_json, student_pdf_s3url, cv_pdf_s3url,
+             header, public_id, boxes_json, student_pdf_s3url, cv_pdf_s3url,
              answers_pdf_s3url, sty_hash, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.prompt,
@@ -159,6 +163,7 @@ def insert_worksheet(conn: Connection, record: WorksheetRecord) -> int:
             record.model,
             record.num_questions,
             record.title,
+            record.header,
             record.public_id,
             record.boxes_json,
             record.student_pdf_s3url,
@@ -255,8 +260,8 @@ def list_handwriting_samples(conn: Connection) -> List[HandwritingSampleRecord]:
 # `_row_to_record` below.
 _RECORD_COLUMNS = (
     "id", "prompt", "tex_source", "questions_json", "model", "num_questions",
-    "title", "public_id", "boxes_json", "student_pdf_s3url", "cv_pdf_s3url",
-    "answers_pdf_s3url", "sty_hash", "created_at",
+    "title", "header", "public_id", "boxes_json", "student_pdf_s3url",
+    "cv_pdf_s3url", "answers_pdf_s3url", "sty_hash", "created_at",
 )
 
 
@@ -269,13 +274,14 @@ def _row_to_record(row) -> WorksheetRecord:
         model=row[4],
         num_questions=row[5],
         title=row[6],
-        public_id=row[7],
-        boxes_json=row[8],
-        student_pdf_s3url=row[9],
-        cv_pdf_s3url=row[10],
-        answers_pdf_s3url=row[11],
-        sty_hash=row[12],
-        created_at=row[13],
+        header=row[7],
+        public_id=row[8],
+        boxes_json=row[9],
+        student_pdf_s3url=row[10],
+        cv_pdf_s3url=row[11],
+        answers_pdf_s3url=row[12],
+        sty_hash=row[13],
+        created_at=row[14],
     )
 
 
@@ -418,6 +424,7 @@ def store_worksheet(
     bucket: str,
     db_path: Path,
     title: Optional[str] = None,
+    header: Optional[str] = None,
     public_id: Optional[str] = None,
     s3_client=None,
 ) -> WorksheetRecord:
@@ -462,6 +469,7 @@ def store_worksheet(
         model=model,
         num_questions=len(questions),
         title=title,
+        header=header,
         public_id=public_id,
         boxes_json=boxes_json,
         student_pdf_s3url=student_url,

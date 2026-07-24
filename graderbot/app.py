@@ -122,6 +122,10 @@ def render_create() -> None:
 def _render_create_ai() -> None:
     prompt = st.text_area("Worksheet prompt", placeholder="10 question algebra worksheet on solving linear equations, grade 9")
     title = st.text_input("Title (optional)", placeholder="Auto-generated from prompt if left blank")
+    header = st.text_area(
+        "Header / instructions (optional)",
+        placeholder="Auto-generated from prompt if left blank",
+    )
     num_questions = st.number_input("Number of questions", min_value=1, max_value=50, value=10)
     model = st.selectbox("Claude model", AVAILABLE_MODELS, index=0)
     submitted = st.button("Generate worksheet", type="primary", disabled=not prompt.strip())
@@ -150,6 +154,7 @@ def _render_create_ai() -> None:
                 bucket=BUCKET,
                 db_path=DB_PATH,
                 title=title.strip() or None,
+                header=header.strip() or None,
                 model=model,
                 on_step=on_step,
             )
@@ -177,6 +182,13 @@ def _render_create_from_json() -> None:
         key="manual_questions_json",
     )
     title = st.text_input("Title", key="manual_title", placeholder="Required")
+    header = st.text_area(
+        "Header / instructions (optional)",
+        key="manual_header",
+        help="Inserted into the LaTeX source as-is (like the questions above), "
+        "so use $...$ for inline math (e.g. $\\frac{a}{b}$) and escape any "
+        "literal %, &, #, _, {, }, ~, ^, or \\ that isn't LaTeX markup.",
+    )
     submitted = st.button(
         "Create from JSON",
         type="primary",
@@ -202,6 +214,7 @@ def _render_create_from_json() -> None:
                 TEMPLATE_PATH,
                 out,
                 title=title.strip(),
+                header=header.strip(),
                 bucket=BUCKET,
                 db_path=DB_PATH,
                 on_step=on_step,

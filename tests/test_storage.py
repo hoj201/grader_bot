@@ -69,6 +69,7 @@ def test_init_db_creates_worksheet_table(tmp_path):
         "model",
         "num_questions",
         "title",
+        "header",
         "public_id",
         "boxes_json",
         "student_pdf_s3url",
@@ -182,6 +183,36 @@ def test_init_db_adds_title_column_to_pre_existing_table(tmp_path):
     assert "title" in columns
 
 
+def test_init_db_adds_header_column_to_pre_existing_table(tmp_path):
+    db_path = tmp_path / "worksheets.sqlite3"
+    legacy_conn = sqlite3.connect(db_path)
+    legacy_conn.execute(
+        """
+        CREATE TABLE WORKSHEET (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            tex_source TEXT,
+            questions_json TEXT,
+            model TEXT,
+            num_questions INTEGER,
+            title TEXT,
+            student_pdf_s3url TEXT,
+            cv_pdf_s3url TEXT,
+            answers_pdf_s3url TEXT,
+            sty_hash TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    conn = init_db(db_path)
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
+    assert "header" in columns
+
+
 def test_init_db_creates_sty_version_table(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
 
@@ -240,6 +271,16 @@ def test_insert_worksheet_persists_title(tmp_path):
 
     row = conn.execute("SELECT title FROM WORKSHEET WHERE id = ?", (new_id,)).fetchone()
     assert row == ("Linear Equations Practice",)
+
+
+def test_insert_worksheet_persists_header(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    record = _sample_record(header="Show your work.")
+
+    new_id = insert_worksheet(conn, record)
+
+    row = conn.execute("SELECT header FROM WORKSHEET WHERE id = ?", (new_id,)).fetchone()
+    assert row == ("Show your work.",)
 
 
 def test_insert_worksheet_allows_null_title(tmp_path):
@@ -528,10 +569,12 @@ def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):
             bucket="graderbot-test-bucket",
             db_path=db_path,
             title="Linear Equations!",
+            header="Show all work.",
             public_id="ws_abcd1234",
         )
 
     assert record.title == "Linear Equations!"
+    assert record.header == "Show all work."
     assert record.student_pdf_s3url == (
         "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/Linear_Equations_student.pdf"
     )

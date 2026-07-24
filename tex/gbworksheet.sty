@@ -15,6 +15,7 @@
 \RequirePackage{tikzpagenodes}
 \RequirePackage{xcolor}
 \RequirePackage{calc}
+\RequirePackage{etoolbox}
 
 \usetikzlibrary{calc}
 
@@ -273,6 +274,19 @@
 \end{tabular*}
 
 \vspace{0.25in}
+}
+
+% ============================================================
+% Worksheet title/header (issue #42)
+% ============================================================
+% An optional title and free-text instructions block rendered below
+% \WorksheetHeader, above the questions. graderbot only emits this macro call
+% when at least one of title/header is set, but \ifblank guards each argument
+% independently so a title-only or header-only call still renders cleanly.
+\newcommand{\WorksheetTitleBlock}[2]{%
+\ifblank{#1}{}{\noindent{\Large\bfseries #1}\par\vspace{0.05in}}%
+\ifblank{#2}{}{\noindent #2\par}%
+\vspace{0.2in}
 }
 
 % ============================================================
