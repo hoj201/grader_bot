@@ -46,6 +46,7 @@ load_dotenv()
 
 _VOYAGE_MULTIMODAL_URL = "https://api.voyageai.com/v1/multimodalembeddings"
 _VOYAGE_MODEL = "voyage-multimodal-3"
+_VOYAGE_DIM = 1024
 
 
 class Embedder(Protocol):
@@ -225,6 +226,20 @@ class RemoteEmbedder:
             )
         self.model = model
 
+    @property
+    def dim(self) -> int:
+        """voyage-multimodal-3's output size, declared rather than probed so a
+        caller can filter a mixed-dimension vector collection (issue #58)
+        without spending an API call. Only this model's size is known, so a
+        different model raises rather than reporting a wrong dimension that
+        would make the filter silently discard every stored vector."""
+        if self.model != _VOYAGE_MODEL:
+            raise AttributeError(
+                f"embedding dimension of Voyage model {self.model!r} is unknown; "
+                f"only {_VOYAGE_MODEL} has a declared dim"
+            )
+        return _VOYAGE_DIM
+
     @staticmethod
     def _data_uri(image: np.ndarray) -> str:
         success, encoded = cv2.imencode(".png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
@@ -362,33 +377,67 @@ def _download_vector(embedding_s3url: str, client) -> np.ndarray:
 
 
 def load_training_vectors(
-    db_path: Path, bucket: Optional[str] = None, s3_client=None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Load every NAME_EMBEDDINGS row's vector from S3. Returns `(vectors,
-    student_ids, name_image_ids)`: `vectors` is `(n, d)` float32,
-    `student_ids`/`name_image_ids` are `(n,)` int arrays. This is the KNN
-    classifier's training data source (issue #43)."""
+    db_path: Path,
+    bucket: Optional[str] = None,
+    s3_client=None,
+    classroom_id: Optional[int] = None,
+    dim: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Load NAME_EMBEDDINGS vectors from S3. Returns `(vectors, student_ids,
+    name_image_ids, n_discarded)`: `vectors` is `(n, d)` float32,
+    `student_ids`/`name_image_ids` are `(n,)` int arrays. This is the
+    classifier's training data source (issue #43).
+
+    `classroom_id` restricts the rows to one classroom's students (joined
+    through STUDENT), so a model is only ever trained on the roster it will be
+    used to grade.
+
+    `dim` keeps only vectors of that length and returns how many were dropped
+    as `n_discarded`. The table can hold vectors from different embedders --
+    switching the default to Voyage (issue #56) left 4096-d LocalEmbedder rows
+    behind next to new 1024-d ones -- and stacking those together raises. Since
+    LocalEmbedder (4096), HOGEmbedder (3780) and Voyage (1024) all embed to
+    distinct sizes, length is a reliable stand-in for "which embedder produced
+    this" here; it would stop being one if two embedders ever shared a size.
+    With `dim=None` nothing is filtered and a mixed collection still raises."""
     bucket = _resolve_bucket(bucket)
     client = _default_client(s3_client)
     conn = init_db(db_path)
     try:
-        rows = conn.execute(
-            "SELECT student_id, name_image_id, embedding_s3url FROM NAME_EMBEDDINGS"
-        ).fetchall()
+        query = (
+            "SELECT e.student_id, e.name_image_id, e.embedding_s3url FROM NAME_EMBEDDINGS e"
+        )
+        params: Tuple = ()
+        if classroom_id is not None:
+            query += (
+                " JOIN STUDENT s ON s.id = e.student_id WHERE s.classroom_id = ?"
+            )
+            params = (classroom_id,)
+        rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
 
+    empty = (
+        np.empty((0, 0), dtype=np.float32),
+        np.empty((0,), dtype=np.int64),
+        np.empty((0,), dtype=np.int64),
+    )
     if not rows:
-        return (
-            np.empty((0, 0), dtype=np.float32),
-            np.empty((0,), dtype=np.int64),
-            np.empty((0,), dtype=np.int64),
-        )
+        return (*empty, 0)
 
-    vectors = np.stack([_download_vector(row[2], client) for row in rows]).astype(np.float32)
-    student_ids = np.array([row[0] for row in rows], dtype=np.int64)
-    name_image_ids = np.array([row[1] for row in rows], dtype=np.int64)
-    return vectors, student_ids, name_image_ids
+    downloaded = [(row[0], row[1], _download_vector(row[2], client)) for row in rows]
+    n_discarded = 0
+    if dim is not None:
+        kept = [item for item in downloaded if item[2].shape[-1] == dim]
+        n_discarded = len(downloaded) - len(kept)
+        downloaded = kept
+    if not downloaded:
+        return (*empty, n_discarded)
+
+    vectors = np.stack([vector for _, _, vector in downloaded]).astype(np.float32)
+    student_ids = np.array([sid for sid, _, _ in downloaded], dtype=np.int64)
+    name_image_ids = np.array([iid for _, iid, _ in downloaded], dtype=np.int64)
+    return vectors, student_ids, name_image_ids, n_discarded
 
 
 def vectorize_samples(
