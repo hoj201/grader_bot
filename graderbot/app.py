@@ -16,7 +16,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import anthropic
-import numpy as np
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
@@ -24,6 +23,7 @@ from dotenv import load_dotenv
 from graderbot import embedding, name_classifier, storage
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
+from graderbot.name_reader import ClassifierNameReader
 from graderbot.name_worksheets import generate_name_worksheets
 from graderbot.scan_grader import mark_scan, results_by_student
 from graderbot.worksheetbot import (
@@ -51,6 +51,26 @@ TEMPLATE_PATH = Path(
 )
 DB_PATH = Path(os.environ.get("WORKSHEETS_DB_PATH", "worksheets.sqlite3"))
 BUCKET = os.environ.get("S3_BUCKET")
+
+# Below this, a name read off a page is worth eyeballing. With the default KNN
+# (k=3) a classifier confidence is one of 0/⅓/⅔/1, so this flags anything short
+# of a 2-of-3 majority; for OCR it's the difflib similarity to the roster match.
+_LOW_CONFIDENCE = 0.5
+
+_CLASSIFIER_NAME_SOURCE = "Handwriting classifier"
+_OCR_NAME_SOURCE = "OCR (Tesseract)"
+
+
+def _embedder_dim() -> "int | None":
+    """Dimension the configured embedder produces, or `None` if that can't be
+    determined (no VOYAGE_API_KEY, an unrecognized NAME_EMBEDDER). `None` means
+    stored vectors go unfiltered, so a mixed-embedder collection will still
+    raise rather than being silently reported as empty."""
+    try:
+        return embedding.default_embedder().dim
+    except Exception:  # noqa: BLE001 - any failure to resolve means "unknown"
+        logger.warning("could not determine embedder dimension", exc_info=True)
+        return None
 
 
 @st.cache_resource
@@ -213,7 +233,15 @@ def render_visualize() -> None:
         st.info("No students in this class yet.")
         return
 
-    vectors, student_ids, name_image_ids = embedding.load_training_vectors(DB_PATH, bucket=BUCKET)
+    vectors, student_ids, name_image_ids, discarded = embedding.load_training_vectors(
+        DB_PATH, bucket=BUCKET, classroom_id=classroom.id, dim=_embedder_dim()
+    )
+    if discarded:
+        st.warning(
+            f"Ignored {discarded} embedding(s) produced by a different embedder. "
+            "Delete and re-ingest those students to re-vectorize them with the "
+            "current one."
+        )
     df = build_scatter_df(vectors, student_ids, name_image_ids, students)
 
     if df.empty:
@@ -245,11 +273,9 @@ def render_visualize() -> None:
         "scored one student at a time (issue #55)."
     )
     if st.button("Evaluate classifier", key="visualize_evaluate_classifier"):
-        roster_ids = {s.id for s in students}
-        in_roster = np.isin(student_ids, list(roster_ids))
         with st.spinner("Running leave-one-out cross-validation..."):
             accuracy, insufficient, confusion = name_classifier.loo_cross_validate(
-                vectors[in_roster], student_ids[in_roster]
+                vectors, student_ids
             )
         name_by_id = {s.id: f"{s.first_name} {s.last_name}".strip() for s in students}
         if accuracy:
@@ -280,6 +306,47 @@ def render_visualize() -> None:
         if insufficient:
             names = ", ".join(name_by_id.get(sid, str(sid)) for sid in insufficient)
             st.caption(f"Insufficient data (need ≥2 samples): {names}")
+
+    st.divider()
+    st.subheader("Train classifier")
+    st.write(
+        "Fit a classifier on this class's handwriting samples and save it, so "
+        "the Grade tab can identify students by their handwriting instead of "
+        "by OCR (issue #58). Retrain after ingesting new name sheets — the "
+        "saved model does not update on its own."
+    )
+    if st.button("Train classifier", key="visualize_train_classifier"):
+        with st.spinner("Training..."):
+            try:
+                report = name_classifier.train_classroom_classifier(
+                    DB_PATH, BUCKET, classroom.id
+                )
+            except ValueError as e:
+                st.error(str(e))
+                return
+        logger.info(
+            "trained name classifier classroom=%s samples=%d students=%d",
+            classroom.id, report.n_samples, report.n_students,
+        )
+        st.success(
+            f"Trained on {report.n_samples} sample(s) from {report.n_students} "
+            f"student(s) and saved to {report.s3_url}"
+        )
+        if report.discarded_wrong_dim:
+            st.warning(
+                f"Skipped {report.discarded_wrong_dim} embedding(s) from a "
+                "different embedder."
+            )
+        if report.students_with_no_samples:
+            st.warning(
+                "No handwriting samples, so these students can never be "
+                "recognized: " + ", ".join(report.students_with_no_samples)
+            )
+        if report.students_with_one_sample:
+            st.warning(
+                "Only one sample each, so recognition will be unreliable for: "
+                + ", ".join(report.students_with_one_sample)
+            )
 
 
 def render_gallery() -> None:
@@ -485,6 +552,45 @@ def _display_results(result) -> dict:
     }
 
 
+def _classifier_exists(classroom_id: int) -> bool:
+    """Whether a trained handwriting classifier is saved for this class."""
+    if not BUCKET:
+        return False
+    try:
+        storage._default_s3_client().head_object(
+            Bucket=BUCKET, Key=name_classifier.classifier_key(classroom_id)
+        )
+        return True
+    except Exception:  # noqa: BLE001 - a 404 and a credentials failure both mean "can't use it"
+        return False
+
+
+def _display_name_predictions(result) -> None:
+    """Show how each page's student was identified, so a doubtful read can be
+    caught by eye (issue #58). Listed per page rather than per student because
+    two pages that resolve to the same name collapse in the results JSON."""
+    if not result.name_predictions:
+        return
+    st.caption("Student names read from each page")
+    st.dataframe(
+        [
+            {
+                "Page": p.page,
+                "Worksheet": p.worksheet_id,
+                "Student": p.name or "(no name)",
+                "Confidence": f"{p.confidence:.0%}",
+                "Read by": p.source,
+            }
+            for p in result.name_predictions
+        ],
+        use_container_width=True,
+    )
+    doubtful = [p for p in result.name_predictions if p.confidence < _LOW_CONFIDENCE]
+    if doubtful:
+        pages = ", ".join(f"{p.page} → {p.name or '(no name)'}" for p in doubtful)
+        st.warning(f"Low-confidence name(s), worth checking by hand: {pages}")
+
+
 def render_grade() -> None:
     st.write(
         "Upload a PDF, JPEG, or PNG of scanned student work. Each page is "
@@ -505,10 +611,41 @@ def render_grade() -> None:
             ]
         finally:
             conn.close()
+
+    has_model = classroom is not None and _classifier_exists(classroom.id)
+    options = [_CLASSIFIER_NAME_SOURCE, _OCR_NAME_SOURCE]
+    name_source = st.selectbox(
+        "Read student names with",
+        options,
+        index=0 if has_model else 1,
+        key="grade_name_source",
+    )
+    if not has_model:
+        st.caption(
+            "No handwriting classifier has been trained for this class yet — "
+            "train one on the Visualize tab to use it here."
+        )
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
 
     if not submitted or uploaded is None:
         return
+
+    name_reader = None
+    if name_source == _CLASSIFIER_NAME_SOURCE:
+        if classroom is None:
+            st.error("Select a class to grade with the handwriting classifier.")
+            return
+        try:
+            name_reader = ClassifierNameReader.from_classroom(DB_PATH, classroom.id, BUCKET)
+        except ValueError as e:
+            st.error(str(e))
+            return
+        if name_reader is None:
+            st.error(
+                "No handwriting classifier is saved for this class. Train one on "
+                "the Visualize tab, or switch to OCR above."
+            )
+            return
 
     with tempfile.TemporaryDirectory() as tmp:
         scan_suffix = Path(uploaded.name).suffix or ".pdf"
@@ -525,7 +662,12 @@ def render_grade() -> None:
                     st.code(detail, language=None)
 
             result = mark_scan(
-                [scan_path], roster, DB_PATH, marked_path, on_step=on_step
+                [scan_path],
+                roster,
+                DB_PATH,
+                marked_path,
+                on_step=on_step,
+                name_reader=name_reader,
             )
             status.update(label="Grading complete", state="complete")
 
@@ -534,6 +676,7 @@ def render_grade() -> None:
             "graded students=%d unreadable=%d unknown_worksheets=%d",
             len(graded), len(result.unreadable), len(result.unknown_worksheets),
         )
+        _display_name_predictions(result)
         if not graded:
             st.warning("No pages could be graded from this PDF.")
         else:

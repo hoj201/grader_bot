@@ -2,7 +2,7 @@ import base64
 import difflib
 import os
 import re
-from typing import List, LiteralString
+from typing import List, LiteralString, Tuple
 
 import cv2
 import numpy as np
@@ -41,20 +41,35 @@ def _tesseract_ocr_name(image: np.ndarray) -> str:
     return pytesseract.image_to_string(upscaled, config="--psm 7").strip()
 
 
-def extract_name(image: np.ndarray, box: Box, roster: List[LiteralString]) -> LiteralString:
-    """Reads the handwritten name inside `box` on `image` (an already-loaded
-    RGB numpy array, e.g. from `load_image_rgb`) and returns whichever name
-    in `roster` it most closely matches.
+def extract_name_scored(
+    image: np.ndarray, box: Box, roster: List[LiteralString]
+) -> Tuple[LiteralString, float]:
+    """Like `extract_name`, but also returns how close the OCR text was to the
+    roster name it matched, as a difflib similarity ratio in (0, 1].
 
     Cursive handwriting OCR is too unreliable to trust verbatim (e.g.
     Tesseract regularly misreads individual letters), but since students
     are drawn from a known, finite roster, fuzzy-matching the noisy OCR
-    text against that roster resolves those misreadings in practice.
+    text against that roster resolves those misreadings in practice. The
+    similarity is that match's quality, which the Grade tab surfaces so a weak
+    match can be spotted by eye (issue #58). Returns `("", 0.0)` when nothing
+    clears `_NAME_MATCH_CUTOFF`.
     """
     cropped = _crop_box(image, box, _BOX_INSET)
     ocr_text = _tesseract_ocr_name(cropped)
     matches = difflib.get_close_matches(ocr_text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
-    return matches[0] if matches else ""
+    if not matches:
+        return "", 0.0
+    # Same sequence orientation difflib.get_close_matches itself uses
+    # (seq1=candidate, seq2=query), so the score matches what it ranked on.
+    return matches[0], difflib.SequenceMatcher(None, matches[0], ocr_text).ratio()
+
+
+def extract_name(image: np.ndarray, box: Box, roster: List[LiteralString]) -> LiteralString:
+    """Reads the handwritten name inside `box` on `image` (an already-loaded
+    RGB numpy array, e.g. from `load_image_rgb`) and returns whichever name
+    in `roster` it most closely matches, or `""` if none is close enough."""
+    return extract_name_scored(image, box, roster)[0]
 
 
 def _strip_math_delimiters(text: str) -> str:

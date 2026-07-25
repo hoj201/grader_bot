@@ -9,6 +9,7 @@ stored in S3 at a caller-chosen key so grading can fetch it later.
 
 import io
 from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
@@ -18,7 +19,14 @@ from sklearn.base import BaseEstimator
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 
-from graderbot.embedding import Embedder, augment_images, load_training_images, load_training_vectors
+from graderbot.embedding import (
+    Embedder,
+    augment_images,
+    default_embedder,
+    load_training_images,
+    load_training_vectors,
+)
+from graderbot.storage import init_db, list_students
 
 DEFAULT_CLASSIFIER_KEY = "name_classifier/knn.joblib"
 _DEFAULT_N_NEIGHBORS = 3
@@ -76,10 +84,15 @@ def train_from_db(
     n_neighbors: int = _DEFAULT_N_NEIGHBORS,
     classifier_factory: Optional[ClassifierFactory] = None,
     s3_client=None,
+    classroom_id: Optional[int] = None,
+    dim: Optional[int] = None,
 ) -> BaseEstimator:
     """Load per-image embeddings from NAME_EMBEDDINGS (issue #43) and train a
-    classifier keyed by student_id."""
-    vectors, student_ids, _ = load_training_vectors(Path(db_path), bucket, s3_client)
+    classifier keyed by student_id. `classroom_id` and `dim` scope the training
+    data (see `load_training_vectors`)."""
+    vectors, student_ids, _, _ = load_training_vectors(
+        Path(db_path), bucket, s3_client, classroom_id=classroom_id, dim=dim
+    )
     return train_name_classifier(vectors, student_ids, n_neighbors, classifier_factory)
 
 
@@ -175,7 +188,7 @@ def loo_cross_validate_from_db(
 ) -> Tuple[Dict, List, Dict]:
     """Load per-image embeddings from NAME_EMBEDDINGS and run `loo_cross_validate`
     keyed by student_id."""
-    vectors, student_ids, _ = load_training_vectors(Path(db_path), bucket, s3_client)
+    vectors, student_ids, _, _ = load_training_vectors(Path(db_path), bucket, s3_client)
     return loo_cross_validate(
         vectors, student_ids, n_neighbors, max_folds_per_class, random_state, classifier_factory
     )
@@ -267,8 +280,14 @@ def _default_client(s3_client):
     return storage._default_s3_client()
 
 
+def classifier_key(classroom_id: int) -> str:
+    """S3 key of a classroom's trained name classifier (issue #58). One model
+    per classroom, because the label space *is* that classroom's roster."""
+    return f"name_classifier/{classroom_id}.joblib"
+
+
 def save_classifier(
-    classifier: KNeighborsClassifier,
+    classifier: BaseEstimator,
     bucket: str,
     key: str = DEFAULT_CLASSIFIER_KEY,
     s3_client=None,
@@ -285,8 +304,81 @@ def save_classifier(
 
 def load_classifier(
     bucket: str, key: str = DEFAULT_CLASSIFIER_KEY, s3_client=None
-) -> KNeighborsClassifier:
+) -> BaseEstimator:
     """Fetch and deserialize the classifier stored at `key` in S3."""
     client = _default_client(s3_client)
     body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
     return joblib.load(io.BytesIO(body))
+
+
+@dataclass
+class TrainingReport:
+    """What a `train_classroom_classifier` run actually trained on (issue #58),
+    so the UI can show whether the model is worth grading with."""
+
+    n_samples: int
+    n_students: int
+    s3_url: str
+    embedding_dim: int
+    # Vectors in the table for this classroom that some *other* embedder
+    # produced, and so were excluded (see `load_training_vectors`).
+    discarded_wrong_dim: int = 0
+    # Roster members the model can never predict: no handwriting samples at all.
+    students_with_no_samples: List[str] = field(default_factory=list)
+    # Roster members with a single sample -- trainable, but nothing to
+    # cross-validate against, so treat their predictions with suspicion.
+    students_with_one_sample: List[str] = field(default_factory=list)
+
+
+def train_classroom_classifier(
+    db_path: Union[str, Path],
+    bucket: str,
+    classroom_id: int,
+    embedder: Optional[Embedder] = None,
+    n_neighbors: int = _DEFAULT_N_NEIGHBORS,
+    classifier_factory: Optional[ClassifierFactory] = None,
+    s3_client=None,
+) -> TrainingReport:
+    """Train one classroom's name classifier and persist it to S3 at
+    `classifier_key(classroom_id)` (issue #58, phase 5).
+
+    Training data is scoped both to the classroom and to the dimension the
+    *live* embedder produces, so a model is never fitted on a mix of
+    embedders' vectors. Returns a `TrainingReport` describing the fit,
+    including the roster members with too few samples to be recognized
+    reliably."""
+    embedder = embedder if embedder is not None else default_embedder()
+    dim = embedder.dim
+    vectors, student_ids, _, discarded = load_training_vectors(
+        Path(db_path), bucket, s3_client, classroom_id=classroom_id, dim=dim
+    )
+    if len(vectors) == 0:
+        raise ValueError(
+            f"no {dim}-dimensional handwriting embeddings for classroom "
+            f"{classroom_id} ({discarded} vector(s) from a different embedder "
+            "were skipped); ingest name sheets and vectorize them first"
+        )
+
+    classifier = train_name_classifier(vectors, student_ids, n_neighbors, classifier_factory)
+    url = save_classifier(classifier, bucket, classifier_key(classroom_id), s3_client)
+
+    counts = Counter(student_ids.tolist())
+    conn = init_db(Path(db_path))
+    try:
+        students = list_students(conn, classroom_id)
+    finally:
+        conn.close()
+    display = {s.id: f"{s.first_name} {s.last_name}".strip() for s in students}
+    return TrainingReport(
+        n_samples=len(vectors),
+        n_students=len(counts),
+        s3_url=url,
+        embedding_dim=dim,
+        discarded_wrong_dim=discarded,
+        students_with_no_samples=sorted(
+            name for sid, name in display.items() if counts.get(sid, 0) == 0
+        ),
+        students_with_one_sample=sorted(
+            name for sid, name in display.items() if counts.get(sid, 0) == 1
+        ),
+    )
