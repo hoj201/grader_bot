@@ -11,8 +11,14 @@ import pytest
 from moto import mock_aws
 
 from graderbot.embedding import (
+    HOGEmbedder,
     LocalEmbedder,
     RemoteEmbedder,
+    augment_image,
+    augment_images,
+    crop_to_ink,
+    default_embedder,
+    load_training_images,
     load_training_vectors,
     vectorize_samples,
 )
@@ -137,7 +143,7 @@ def test_vectorize_samples_builds_collection(tmp_path):
     zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
 
-    added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3)
+    added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
     assert added == 2
 
     vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
@@ -156,15 +162,16 @@ def test_vectorize_samples_appends_and_dedupes(tmp_path):
     _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
     conn.close()
 
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
+    local = LocalEmbedder()
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 1
     # Nothing new to embed on a second run.
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 0
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 0
 
     # Add another sample; only the new one is embedded, prior vectors preserved.
     conn = init_db(db_path)
     _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 1
 
     vectors, student_ids, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape[0] == 2
@@ -185,3 +192,143 @@ def test_load_training_vectors_missing_returns_empty(tmp_path):
         s3.create_bucket(Bucket=BUCKET)
         vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0
+
+
+def test_default_embedder_defaults_to_voyage(monkeypatch):
+    monkeypatch.delenv("NAME_EMBEDDER", raising=False)
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    assert isinstance(default_embedder(), RemoteEmbedder)
+
+
+def test_default_embedder_local_override(monkeypatch):
+    monkeypatch.setenv("NAME_EMBEDDER", "local")
+    assert isinstance(default_embedder(), LocalEmbedder)
+
+
+def test_default_embedder_rejects_unknown(monkeypatch):
+    monkeypatch.setenv("NAME_EMBEDDER", "bogus")
+    with pytest.raises(ValueError, match="unknown NAME_EMBEDDER"):
+        default_embedder()
+
+
+def test_crop_to_ink_tightens_to_strokes():
+    # Small text in the corner of a large blank crop -> cropped much smaller.
+    img = np.full((120, 400, 3), 255, np.uint8)
+    cv2.putText(img, "Hi", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    cropped = crop_to_ink(img)
+    assert cropped.shape[0] < img.shape[0]
+    assert cropped.shape[1] < img.shape[1]
+    # The ink survives the crop (there are still dark pixels).
+    assert (cv2.cvtColor(cropped, cv2.COLOR_RGB2GRAY) < 128).any()
+
+
+def test_crop_to_ink_is_translation_invariant():
+    # The same text at two offsets crops to near-identical size.
+    left = _crop_with_text("Anna")  # text near left edge
+    right = np.full((60, 200, 3), 255, np.uint8)
+    cv2.putText(right, "Anna", (90, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    a, b = crop_to_ink(left), crop_to_ink(right)
+    assert abs(a.shape[0] - b.shape[0]) <= 4
+    assert abs(a.shape[1] - b.shape[1]) <= 4
+
+
+def test_crop_to_ink_returns_blank_unchanged():
+    blank = np.full((60, 200, 3), 255, np.uint8)
+    np.testing.assert_array_equal(crop_to_ink(blank), blank)
+
+
+def test_local_embedder_register_is_translation_robust():
+    # Same word at different horizontal offsets should embed closer together
+    # with registration than without.
+    left = _crop_with_text("Anna")
+    right = np.full((60, 200, 3), 255, np.uint8)
+    cv2.putText(right, "Anna", (90, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+
+    plain = LocalEmbedder(register=False)
+    reg = LocalEmbedder(register=True)
+    plain_dist = np.linalg.norm(plain.embed([left])[0] - plain.embed([right])[0])
+    reg_dist = np.linalg.norm(reg.embed([left])[0] - reg.embed([right])[0])
+    assert reg_dist < plain_dist
+
+
+def test_hog_embedder_shape_and_unit_norm():
+    embedder = HOGEmbedder()
+    images = [_crop_with_text("Anna"), _crop_with_text("Zeke")]
+    vectors = embedder.embed(images)
+    assert vectors.shape == (2, embedder.dim)
+    assert vectors.dtype == np.float32
+    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1.0, rtol=1e-5)
+
+
+def test_hog_embedder_is_deterministic_and_discriminative():
+    embedder = HOGEmbedder()
+    a1 = embedder.embed([_crop_with_text("Anna")])[0]
+    a2 = embedder.embed([_crop_with_text("Anna")])[0]
+    b = embedder.embed([_crop_with_text("Zeke")])[0]
+    np.testing.assert_array_equal(a1, a2)
+    assert np.linalg.norm(a1 - b) > np.linalg.norm(a1 - a2)
+
+
+def test_hog_embedder_handles_empty_batch():
+    embedder = HOGEmbedder()
+    assert embedder.embed([]).shape == (0, embedder.dim)
+
+
+def test_augment_image_preserves_shape_and_dtype():
+    image = _crop_with_text("Anna")
+    rng = np.random.default_rng(0)
+    distorted = augment_image(image, rng)
+    assert distorted.shape == image.shape
+    assert distorted.dtype == image.dtype
+
+
+def test_augment_image_perturbs_pixels():
+    image = _crop_with_text("Anna")
+    rng = np.random.default_rng(0)
+    distorted = augment_image(image, rng)
+    assert not np.array_equal(distorted, image)
+
+
+def test_augment_image_is_seed_reproducible():
+    image = _crop_with_text("Anna")
+    a = augment_image(image, np.random.default_rng(42))
+    b = augment_image(image, np.random.default_rng(42))
+    np.testing.assert_array_equal(a, b)
+
+
+def test_augment_images_returns_n_augmentations_per_image():
+    images = [_crop_with_text("Anna"), _crop_with_text("Zeke")]
+    rng = np.random.default_rng(0)
+    augmented = augment_images(images, rng, n_augmentations=3)
+    assert len(augmented) == 6
+    for image in augmented:
+        assert image.shape == images[0].shape
+
+
+@mock_aws
+def test_load_training_images_from_db(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna_id = _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
+    zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
+    conn.close()
+
+    images, student_ids, name_image_ids = load_training_images(db_path, BUCKET, s3_client=s3)
+    assert len(images) == 2
+    assert all(isinstance(image, np.ndarray) and image.ndim == 3 for image in images)
+    assert set(student_ids.tolist()) == {anna_id, zeke_id}
+    assert len(name_image_ids) == 2
+
+
+def test_load_training_images_missing_returns_empty(tmp_path):
+    db_path = tmp_path / "db.sqlite3"
+    init_db(db_path).close()
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="us-east-1")
+        s3.create_bucket(Bucket=BUCKET)
+        images, student_ids, name_image_ids = load_training_images(db_path, BUCKET, s3_client=s3)
+    assert images == []
+    assert student_ids.size == 0 and name_image_ids.size == 0
