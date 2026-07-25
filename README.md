@@ -48,6 +48,81 @@ The [worksheetbot](./graderbot/worksheetbot.py) pipeline can upload the generate
 configured, the worksheet is still compiled but nothing is uploaded or
 stored.
 
+### Schema (ERD)
+All six tables live in the one SQLite DB created by `init_db` (`storage.py`).
+`CLASSROOM`/`STUDENT`/`NAME_IMAGES`/`NAME_EMBEDDINGS` form the roster/name-classifier
+chain (issues #2/#43/#46); `WORKSHEET`, `STY_VERSION`, and `MATHPIX_CALL` are
+standalone. The `WORKSHEET.sty_hash -> STY_VERSION.hash` link is a convention
+followed in code (`record_sty_version`), not a SQLite `FOREIGN KEY` constraint.
+
+```mermaid
+erDiagram
+    CLASSROOM ||--o{ STUDENT : enrolls
+    STUDENT ||--o{ NAME_IMAGES : "has samples"
+    STUDENT ||--o{ NAME_EMBEDDINGS : "has embeddings"
+    NAME_IMAGES ||--o| NAME_EMBEDDINGS : "embedded as"
+    STY_VERSION ||--o{ WORKSHEET : "compiled with (by convention)"
+
+    CLASSROOM {
+        int id PK
+        string label UK
+        string created_at
+    }
+    STUDENT {
+        int id PK
+        int classroom_id FK
+        string first_name
+        string last_name
+        string nickname
+        string created_at
+    }
+    NAME_IMAGES {
+        int id PK
+        int student_id FK
+        string box_id
+        string image_s3url
+        string image_sha256
+        string created_at
+    }
+    NAME_EMBEDDINGS {
+        int id PK
+        int student_id FK
+        int name_image_id FK "UNIQUE"
+        string embedding_s3url
+        string created_at
+    }
+    WORKSHEET {
+        int id PK
+        string prompt
+        string tex_source
+        string questions_json
+        string model
+        int num_questions
+        string title
+        string header
+        string public_id
+        string boxes_json
+        string student_pdf_s3url
+        string cv_pdf_s3url
+        string answers_pdf_s3url
+        string sty_hash "not a DB FK"
+        string created_at
+    }
+    STY_VERSION {
+        string hash PK
+        string content
+        string created_at
+    }
+    MATHPIX_CALL {
+        int id PK
+        string image_s3url
+        string image_sha256
+        string response_json
+        string response_text
+        string created_at
+    }
+```
+
 ### System dependencies
 Beyond the Python packages (managed with poetry), grading and worksheet
 compilation shell out to native binaries that must be on your `PATH`:
