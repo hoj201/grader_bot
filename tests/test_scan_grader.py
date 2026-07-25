@@ -6,6 +6,7 @@ import pytest
 
 from graderbot import scan_grader
 from graderbot.models import Box, QuestionResult
+from graderbot.name_reader import CLASSIFIER_SOURCE, OCR_SOURCE, NameGuess
 from graderbot.scan_grader import grade_scans, mark_scan, results_by_student
 from graderbot.storage import init_db, insert_worksheet, serialize_boxes
 from tests.test_storage import _sample_record
@@ -67,9 +68,18 @@ def patched_cv(monkeypatch):
     monkeypatch.setattr(scan_grader, "load_scan_pages", lambda path: [path])
     monkeypatch.setattr(scan_grader, "rectify_to_canonical", lambda image: image)
     monkeypatch.setattr(scan_grader, "read_worksheet_id", lambda image: id_by_path[image])
-    monkeypatch.setattr(
-        scan_grader, "extract_name", lambda image, box, roster: name_by_path[image]
-    )
+
+    class _StubOcrNameReader:
+        """Stands in for the Tesseract reader `_grade_batch` builds by default,
+        looking the name up by path instead of running OCR."""
+
+        def __init__(self, roster):
+            self.roster = roster
+
+        def read_many(self, images, box):
+            return [NameGuess(name_by_path[image], 1.0, OCR_SOURCE) for image in images]
+
+    monkeypatch.setattr(scan_grader, "OcrNameReader", _StubOcrNameReader)
 
     def fake_grade_hw(answer_key, boxes, image):
         grade_hw_calls.append({"answer_key": answer_key, "boxes": boxes, "image": image})
@@ -183,7 +193,7 @@ def test_grade_scans_reports_progress_via_on_step(db_with_two_worksheets, patche
 
     joined = "\n".join(messages)
     assert "decoded worksheet id=ws_1" in joined
-    assert "graded Alice Smith -- 2/2 correct" in joined
+    assert "graded Alice Smith [ocr 100%] -- 2/2 correct" in joined
 
 
 def test_on_step_distinguishes_rectify_from_qr_failure(
@@ -245,3 +255,97 @@ def test_mark_scan_writes_no_pdf_when_nothing_grades(
 
     assert result.unreadable == ["blank.png"]
     assert not out_path.exists()
+
+
+# --------------------------------------------------------------------------
+# Name reading (issue #58)
+
+
+def test_grade_scans_records_a_name_prediction_per_page(
+    db_with_two_worksheets, patched_cv
+):
+    result = grade_scans(
+        ["alice.png", "bob.png", "carol.png"],
+        roster=["Alice Smith", "Bob Jones", "Carol White"],
+        db_path=db_with_two_worksheets,
+    )
+
+    by_page = {p.page: p for p in result.name_predictions}
+    assert set(by_page) == {"alice.png", "bob.png", "carol.png"}
+    assert by_page["alice.png"].name == "Alice Smith"
+    assert by_page["alice.png"].worksheet_id == "ws_1"
+    assert by_page["carol.png"].worksheet_id == "ws_2"
+    assert all(p.source == OCR_SOURCE for p in result.name_predictions)
+
+
+def test_name_predictions_keep_pages_the_results_dict_collapses(
+    db_with_two_worksheets, monkeypatch, patched_cv
+):
+    """Two pages read as the same student overwrite each other in
+    results_by_worksheet; the per-page predictions still show both, which is
+    how such a misread gets noticed."""
+
+    class _AlwaysAlice:
+        def __init__(self, roster):
+            pass
+
+        def read_many(self, images, box):
+            return [NameGuess("Alice Smith", 0.4, OCR_SOURCE) for _ in images]
+
+    monkeypatch.setattr(scan_grader, "OcrNameReader", _AlwaysAlice)
+
+    result = grade_scans(
+        ["alice.png", "bob.png"], roster=["Alice Smith"], db_path=db_with_two_worksheets
+    )
+
+    assert set(result.results_by_worksheet["ws_1"]) == {"Alice Smith"}
+    assert [p.page for p in result.name_predictions] == ["alice.png", "bob.png"]
+
+
+def test_grade_scans_uses_an_injected_name_reader(db_with_two_worksheets, patched_cv):
+    """Passing a reader bypasses OCR entirely -- this is how the Grade tab
+    switches to the handwriting classifier."""
+    seen = []
+
+    class _ClassifierStub:
+        def read_many(self, images, box):
+            seen.append(list(images))
+            return [NameGuess("Zoe Zhang", 0.67, CLASSIFIER_SOURCE, student_id=9) for _ in images]
+
+    result = grade_scans(
+        ["alice.png", "bob.png"],
+        roster=["Alice Smith", "Bob Jones"],
+        db_path=db_with_two_worksheets,
+        name_reader=_ClassifierStub(),
+    )
+
+    assert set(result.results_by_worksheet["ws_1"]) == {"Zoe Zhang"}
+    assert all(p.source == CLASSIFIER_SOURCE for p in result.name_predictions)
+    assert result.name_predictions[0].confidence == pytest.approx(0.67)
+    # Both pages of the worksheet group were read in a single batched call, so a
+    # remote embedder is charged once rather than per page.
+    assert seen == [["alice.png", "bob.png"]]
+
+
+def test_mark_scan_forwards_the_name_reader(
+    db_with_two_worksheets, patched_cv, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        scan_grader,
+        "render_marked_page",
+        lambda image, results, boxes: np.full((20, 20, 3), 255, dtype=np.uint8),
+    )
+
+    class _ClassifierStub:
+        def read_many(self, images, box):
+            return [NameGuess("Zoe Zhang", 1.0, CLASSIFIER_SOURCE) for _ in images]
+
+    result = mark_scan(
+        ["alice.png"],
+        roster=["Alice Smith"],
+        db_path=db_with_two_worksheets,
+        out_path=tmp_path / "marked.pdf",
+        name_reader=_ClassifierStub(),
+    )
+
+    assert set(result.results_by_worksheet["ws_1"]) == {"Zoe Zhang"}

@@ -8,9 +8,10 @@ worksheet. A single call can mix scans from different worksheets: they are
 grouped by decoded id and each group graded against its own worksheet.
 
 The heavy CV/OCR work is reused from `graderbot` (`load_image_rgb`,
-`read_worksheet_id`, `extract_name`, `grade_hw`); the answer key and box
-locations come from `storage` (`get_worksheet_by_public_id`,
-`deserialize_boxes`).
+`read_worksheet_id`, `grade_hw`); the answer key and box locations come from
+`storage` (`get_worksheet_by_public_id`, `deserialize_boxes`). Which student
+wrote a page is decided by a `name_reader.NameReader` -- Tesseract by default,
+or the trained handwriting classifier (issue #58).
 """
 
 import json
@@ -27,7 +28,7 @@ import numpy as np
 from graderbot.grading import grade_hw
 from graderbot.imaging import load_scan_pages
 from graderbot.models import Box, QuestionResult
-from graderbot.ocr import extract_name
+from graderbot.name_reader import NameGuess, NameReader, OcrNameReader
 from graderbot.registration import read_worksheet_id, rectify_to_canonical
 from graderbot.markup import render_marked_page
 from graderbot.storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
@@ -51,6 +52,20 @@ def _print_step(msg: str, detail: Optional[str] = None) -> None:
 
 
 @dataclass
+class NamePrediction:
+    """How one page's student name was identified (issue #58). Kept per page --
+    unlike `results_by_worksheet`, which is keyed by name and so collapses two
+    pages that resolved to the same student -- so the Grade tab can show every
+    page's read and its confidence."""
+
+    page: str
+    worksheet_id: str
+    name: str
+    confidence: float
+    source: str
+
+
+@dataclass
 class ScanBatchResult:
     """Outcome of grading a pile of scans.
 
@@ -59,11 +74,14 @@ class ScanBatchResult:
     - `unreadable`: scan paths whose QR id could not be decoded.
     - `unknown_worksheets`: decoded id -> scan paths, for ids with no matching
       (or incompletely stored) database row.
+    - `name_predictions`: one entry per graded page, in scan order, recording
+      the name read off it and how confident the reader was.
     """
 
     results_by_worksheet: Dict[str, Dict[str, StudentResults]] = field(default_factory=dict)
     unreadable: List[str] = field(default_factory=list)
     unknown_worksheets: Dict[str, List[str]] = field(default_factory=dict)
+    name_predictions: List[NamePrediction] = field(default_factory=list)
 
 
 @dataclass
@@ -76,6 +94,8 @@ class _GradedScan:
     image: np.ndarray
     question_boxes: Dict[str, Box]
     results: StudentResults
+    confidence: float = 0.0
+    name_source: str = ""
 
 
 def _grade_batch(
@@ -83,6 +103,7 @@ def _grade_batch(
     roster: List[str],
     conn: Connection,
     on_step: OnStep = _print_step,
+    name_reader: Optional[NameReader] = None,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
     """Shared core of `grade_scans`/`mark_scan`: rectifies every scan page to the
     canonical frame, groups pages by decoded worksheet id, and grades each group
@@ -90,9 +111,15 @@ def _grade_batch(
     marked-up render lands its marks in the same aligned frame. Returns the
     summary result plus, in scan order, the per-page graded material.
 
+    `name_reader` identifies the student on each page; it defaults to
+    `OcrNameReader(roster)`, the Tesseract path grading has always used. Pass a
+    `ClassifierNameReader` to use the trained handwriting classifier instead
+    (issue #58).
+
     `on_step(msg, detail)` receives per-page progress, separating the two ways a
     page becomes "unreadable" -- rectification (ArUco markers not found) versus
     QR-code decode -- so a failure can be pinned to the exact page and stage."""
+    name_reader = name_reader if name_reader is not None else OcrNameReader(roster)
     # Group rectified pages by decoded worksheet id.
     grouped: Dict[str, List[Tuple[str, np.ndarray]]] = defaultdict(list)
     result = ScanBatchResult()
@@ -139,18 +166,42 @@ def _grade_batch(
             qid: box for qid, box in boxes.items() if qid != _NAME_BOX_ID
         }
 
+        # Read every page's name in one batch: a remote embedder then embeds the
+        # whole group in a single API call instead of one per page.
+        if name_box is not None:
+            guesses = name_reader.read_many([image for _, image in items], name_box)
+        else:
+            guesses = [NameGuess("", 0.0, "none") for _ in items]
+
         student_results: Dict[str, StudentResults] = {}
-        for label, image in items:
-            name = extract_name(image, name_box, roster) if name_box is not None else ""
+        for (label, image), guess in zip(items, guesses):
             results = grade_hw(answer_key, question_boxes, image)
-            student_results[name] = results
+            student_results[guess.name] = results
             n_correct = sum(1 for r in results.values() if r.correct)
             on_step(
-                f"{label}: graded {name or '(no name)'} -- "
+                f"{label}: graded {guess.name or '(no name)'} "
+                f"[{guess.source} {guess.confidence:.0%}] -- "
                 f"{n_correct}/{len(results)} correct."
             )
+            result.name_predictions.append(
+                NamePrediction(
+                    page=label,
+                    worksheet_id=worksheet_id,
+                    name=guess.name,
+                    confidence=guess.confidence,
+                    source=guess.source,
+                )
+            )
             graded_scans.append(
-                _GradedScan(worksheet_id, name, image, question_boxes, results)
+                _GradedScan(
+                    worksheet_id,
+                    guess.name,
+                    image,
+                    question_boxes,
+                    results,
+                    guess.confidence,
+                    guess.source,
+                )
             )
         result.results_by_worksheet[worksheet_id] = student_results
 
@@ -172,14 +223,16 @@ def grade_scans(
     roster: List[str],
     db_path: Union[str, Path],
     on_step: OnStep = _print_step,
+    name_reader: Optional[NameReader] = None,
 ) -> ScanBatchResult:
     """Grades each scan in `hws` against the worksheet its QR code identifies,
     fetched from the database at `db_path`. Student names are resolved against
-    `roster`. `on_step` streams per-page progress (see `_grade_batch`). See
-    `ScanBatchResult` for the return shape."""
+    `roster` by OCR unless `name_reader` overrides that (see `_grade_batch`).
+    `on_step` streams per-page progress. See `ScanBatchResult` for the return
+    shape."""
     conn = init_db(Path(db_path))
     try:
-        result, _ = _grade_batch(hws, roster, conn, on_step=on_step)
+        result, _ = _grade_batch(hws, roster, conn, on_step=on_step, name_reader=name_reader)
         return result
     finally:
         conn.close()
@@ -191,6 +244,7 @@ def mark_scan(
     db_path: Union[str, Path],
     out_path: Union[str, Path],
     on_step: OnStep = _print_step,
+    name_reader: Optional[NameReader] = None,
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
@@ -200,7 +254,7 @@ def mark_scan(
     unknown contribute no page). No PDF is written if nothing graded."""
     conn = init_db(Path(db_path))
     try:
-        result, graded = _grade_batch(hws, roster, conn, on_step=on_step)
+        result, graded = _grade_batch(hws, roster, conn, on_step=on_step, name_reader=name_reader)
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")
             marked_bgr = [

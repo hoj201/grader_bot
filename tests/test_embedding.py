@@ -146,7 +146,7 @@ def test_vectorize_samples_builds_collection(tmp_path):
     added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
     assert added == 2
 
-    vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
+    vectors, student_ids, name_image_ids, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape == (2, LocalEmbedder().dim)
     assert set(student_ids.tolist()) == {anna_id, zeke_id}
     assert len(name_image_ids) == 2
@@ -173,7 +173,7 @@ def test_vectorize_samples_appends_and_dedupes(tmp_path):
     conn.close()
     assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 1
 
-    vectors, student_ids, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
+    vectors, student_ids, _, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape[0] == 2
     assert len(set(student_ids.tolist())) == 2
 
@@ -190,8 +190,92 @@ def test_load_training_vectors_missing_returns_empty(tmp_path):
     with mock_aws():
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket=BUCKET)
-        vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
+        vectors, student_ids, name_image_ids, discarded = load_training_vectors(
+            db_path, BUCKET, s3_client=s3
+        )
     assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0
+    assert discarded == 0
+
+
+@mock_aws
+def test_load_training_vectors_scopes_to_classroom(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    anna_id = _seed_sample(conn, s3, room_a.id, "Anna", "Anna")
+    _seed_sample(conn, s3, room_b.id, "Zeke", "Zeke")
+    conn.close()
+    vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
+
+    vectors, student_ids, _, _ = load_training_vectors(
+        db_path, BUCKET, s3_client=s3, classroom_id=room_a.id
+    )
+
+    # Only Room A's student, even though both classrooms have embeddings.
+    assert vectors.shape[0] == 1
+    assert student_ids.tolist() == [anna_id]
+
+
+@mock_aws
+def test_load_training_vectors_filters_mixed_dimensions(tmp_path):
+    """A collection embedded before the Voyage switch holds 4096-d vectors next
+    to new 1024-d ones; `dim` keeps one embedder's and counts the rest (#58)."""
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
+    conn.close()
+    # One 4096-d vector from the old default embedder...
+    vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
+    # ...then a second sample embedded at a different size.
+    conn = init_db(db_path)
+    zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
+    conn.close()
+    vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder(size=(32, 32)))
+
+    # Unfiltered, the mismatched rows can't be stacked at all.
+    with pytest.raises(ValueError):
+        load_training_vectors(db_path, BUCKET, s3_client=s3)
+
+    vectors, student_ids, _, discarded = load_training_vectors(
+        db_path, BUCKET, s3_client=s3, dim=32 * 32
+    )
+    assert vectors.shape == (1, 32 * 32)
+    assert student_ids.tolist() == [zeke_id]
+    assert discarded == 1
+
+
+@mock_aws
+def test_load_training_vectors_all_wrong_dimension_returns_empty(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
+    conn.close()
+    vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
+
+    vectors, student_ids, _, discarded = load_training_vectors(
+        db_path, BUCKET, s3_client=s3, dim=1024
+    )
+
+    assert vectors.size == 0 and student_ids.size == 0
+    assert discarded == 1
+
+
+def test_remote_embedder_dim_is_declared(monkeypatch):
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    assert RemoteEmbedder().dim == 1024
+    # An unrecognized model's size is unknown; reporting 1024 anyway would make
+    # the dim filter silently discard every stored vector.
+    with pytest.raises(AttributeError, match="unknown"):
+        RemoteEmbedder(model="voyage-something-else").dim
 
 
 def test_default_embedder_defaults_to_voyage(monkeypatch):

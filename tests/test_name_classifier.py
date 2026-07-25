@@ -13,12 +13,14 @@ from sklearn.neighbors import KNeighborsClassifier
 from graderbot.embedding import LocalEmbedder
 from graderbot.name_classifier import (
     DEFAULT_CLASSIFIER_KEY,
+    classifier_key,
     load_classifier,
     logistic_regression_factory,
     loo_cross_validate,
     loo_cross_validate_augmented,
     loo_cross_validate_from_db,
     save_classifier,
+    train_classroom_classifier,
     train_from_db,
     train_name_classifier,
 )
@@ -156,6 +158,143 @@ def test_train_from_db(tmp_path):
     clf = train_from_db(db_path, BUCKET, s3_client=s3)
     assert set(clf.classes_.tolist()) == {anna.id, zeke.id}
     assert DEFAULT_CLASSIFIER_KEY  # sanity: constant exists
+
+
+def _store_vector(conn, s3, student_id: int, vector: np.ndarray, tag: str) -> None:
+    """Insert a NAME_IMAGES + NAME_EMBEDDINGS pair with `vector` on S3, exactly
+    as embedding.vectorize_samples would."""
+    image_id = insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student_id,
+            box_id="name1",
+            image_s3url=f"https://{BUCKET}.s3.amazonaws.com/img{tag}.png",
+            image_sha256=f"sha{tag}",
+        ),
+    )
+    key = f"name_embeddings/{student_id}/{image_id}.npy"
+    buffer = io.BytesIO()
+    np.save(buffer, vector)
+    s3.put_object(Bucket=BUCKET, Key=key, Body=buffer.getvalue())
+    insert_name_embedding(
+        conn,
+        NameEmbeddingRecord(
+            student_id=student_id,
+            name_image_id=image_id,
+            embedding_s3url=f"https://{BUCKET}.s3.amazonaws.com/{key}",
+        ),
+    )
+
+
+def test_classifier_key_is_per_classroom():
+    assert classifier_key(7) == "name_classifier/7.joblib"
+    assert classifier_key(7) != classifier_key(8)
+
+
+# An embedder whose dim matches the 8-wide vectors `_labelled_vectors` builds,
+# so train_classroom_classifier's dim filter keeps them.
+def _eight_dim_embedder():
+    return LocalEmbedder(size=(2, 4))
+
+
+@mock_aws
+def test_train_classroom_classifier_saves_and_reports(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    zeke = get_or_create_student(conn, classroom.id, "Zeke", "Jones")
+    # A roster member who never handed in a name sheet, and one who handed in
+    # a single sample -- the two "insufficient data" cases the UI warns about.
+    get_or_create_student(conn, classroom.id, "Nora", "None")
+    solo = get_or_create_student(conn, classroom.id, "Solo", "One")
+
+    vectors, labels = _labelled_vectors()
+    for i, (vector, label) in enumerate(zip(vectors, labels)):
+        _store_vector(conn, s3, (anna if label == "Anna" else zeke).id, vector, str(i))
+    _store_vector(conn, s3, solo.id, vectors[0], "solo")
+    conn.close()
+
+    report = train_classroom_classifier(
+        db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
+    )
+
+    assert report.n_samples == 11
+    assert report.n_students == 3
+    assert report.embedding_dim == 8
+    assert report.discarded_wrong_dim == 0
+    assert report.students_with_no_samples == ["Nora None"]
+    assert report.students_with_one_sample == ["Solo One"]
+    assert report.s3_url.endswith(classifier_key(classroom.id))
+
+    # The model actually landed at the per-classroom key and predicts student ids.
+    loaded = load_classifier(BUCKET, classifier_key(classroom.id), s3_client=s3)
+    assert set(loaded.classes_.tolist()) == {anna.id, zeke.id, solo.id}
+    assert loaded.predict(vectors[:1])[0] == anna.id
+
+
+@mock_aws
+def test_train_classroom_classifier_ignores_other_classrooms(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    anna = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    other = get_or_create_student(conn, room_b.id, "Zeke", "Jones")
+    vectors, _ = _labelled_vectors()
+    _store_vector(conn, s3, anna.id, vectors[0], "a")
+    _store_vector(conn, s3, other.id, vectors[-1], "b")
+    conn.close()
+
+    report = train_classroom_classifier(
+        db_path, BUCKET, room_a.id, embedder=_eight_dim_embedder(), s3_client=s3
+    )
+
+    assert report.n_samples == 1
+    loaded = load_classifier(BUCKET, classifier_key(room_a.id), s3_client=s3)
+    assert loaded.classes_.tolist() == [anna.id]
+
+
+@mock_aws
+def test_train_classroom_classifier_skips_other_embedders_vectors(tmp_path):
+    """Vectors left behind by a previous embedder are excluded, and counted."""
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    anna = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    vectors, _ = _labelled_vectors()
+    _store_vector(conn, s3, anna.id, vectors[0], "good")
+    _store_vector(conn, s3, anna.id, np.zeros(4096, dtype=np.float32), "stale")
+    conn.close()
+
+    report = train_classroom_classifier(
+        db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
+    )
+
+    assert report.n_samples == 1
+    assert report.discarded_wrong_dim == 1
+
+
+@mock_aws
+def test_train_classroom_classifier_without_usable_vectors_raises(tmp_path):
+    s3 = boto3.client("s3", region_name="us-east-1")
+    s3.create_bucket(Bucket=BUCKET)
+    db_path = tmp_path / "db.sqlite3"
+    conn = init_db(db_path)
+    classroom = get_or_create_classroom(conn, "Room 101")
+    get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    conn.close()
+
+    with pytest.raises(ValueError, match="no 8-dimensional handwriting embeddings"):
+        train_classroom_classifier(
+            db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
+        )
 
 
 def test_loo_cross_validate_scores_well_separated_clusters_perfectly():
