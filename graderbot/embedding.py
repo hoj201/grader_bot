@@ -2,15 +2,18 @@
 collection on S3 (issue #2, phase 2).
 
 Each name-classifier training sample is one student's own handwriting of their
-own name, so the per-class pattern is highly consistent -- closer to template
-matching than open-ended handwriting recognition. A lightweight, in-process
-embedder (`LocalEmbedder`: normalize + resize + flatten) is therefore the
-default and pulls in no heavy dependencies.
+own name. Two embedders are available (chosen by `default_embedder`, keyed on
+the `NAME_EMBEDDER` env var):
 
-The `Embedder` protocol keeps the embedding step swappable: `RemoteEmbedder`
-(issue #46) POSTs crops to the Voyage multimodal-3 API instead of running a
-self-hosted model, without touching ingest, training, or the collection
-format.
+- `RemoteEmbedder` (issue #46): POSTs crops to the Voyage multimodal-3 API.
+  This is the default -- on the real roster it scored perfect leave-one-out
+  accuracy versus ~0.56 for raw pixels (issue #56), so it's what actually
+  makes the classifier usable.
+- `LocalEmbedder`: a lightweight in-process fallback (normalize + resize +
+  flatten) with no heavy dependency and no API key, for offline use.
+
+The `Embedder` protocol keeps the embedding step swappable without touching
+ingest, training, or the collection format.
 
 `vectorize_samples` embeds any NAME_IMAGES crops not already vectorized
 (issue #43) and uploads each vector to its own `.npy` object on S3, recording
@@ -252,6 +255,23 @@ class RemoteEmbedder:
         return np.divide(vectors, norms, out=vectors, where=norms > 0)
 
 
+def default_embedder() -> Embedder:
+    """The embedder used when a caller doesn't pass one explicitly. Selected by
+    the `NAME_EMBEDDER` env var: `voyage` (default) returns `RemoteEmbedder`,
+    `local` returns `LocalEmbedder`.
+
+    Voyage is the default because on the real roster it scored a perfect
+    leave-one-out accuracy versus ~0.56 for raw pixels and ~0.83 for HOG
+    (issue #56); `local` remains available for offline/no-API-key use and is
+    what the tests pass explicitly to avoid network calls."""
+    choice = os.environ.get("NAME_EMBEDDER", "voyage").strip().lower()
+    if choice == "local":
+        return LocalEmbedder()
+    if choice == "voyage":
+        return RemoteEmbedder()
+    raise ValueError(f"unknown NAME_EMBEDDER {choice!r}; expected 'voyage' or 'local'")
+
+
 def augment_image(
     image: np.ndarray,
     rng: np.random.Generator,
@@ -390,7 +410,7 @@ def vectorize_samples(
         warnings.warn("vectorize_samples: no S3 bucket configured; skipping.")
         return 0
 
-    embedder = embedder if embedder is not None else LocalEmbedder()
+    embedder = embedder if embedder is not None else default_embedder()
     client = _default_client(s3_client)
 
     conn = init_db(db_path)

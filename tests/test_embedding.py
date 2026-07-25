@@ -17,6 +17,7 @@ from graderbot.embedding import (
     augment_image,
     augment_images,
     crop_to_ink,
+    default_embedder,
     load_training_images,
     load_training_vectors,
     vectorize_samples,
@@ -142,7 +143,7 @@ def test_vectorize_samples_builds_collection(tmp_path):
     zeke_id = _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
 
-    added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3)
+    added = vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=LocalEmbedder())
     assert added == 2
 
     vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
@@ -161,15 +162,16 @@ def test_vectorize_samples_appends_and_dedupes(tmp_path):
     _seed_sample(conn, s3, classroom.id, "Anna", "Anna")
     conn.close()
 
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
+    local = LocalEmbedder()
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 1
     # Nothing new to embed on a second run.
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 0
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 0
 
     # Add another sample; only the new one is embedded, prior vectors preserved.
     conn = init_db(db_path)
     _seed_sample(conn, s3, classroom.id, "Zeke", "Zeke")
     conn.close()
-    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3) == 1
+    assert vectorize_samples(db_path, bucket=BUCKET, s3_client=s3, embedder=local) == 1
 
     vectors, student_ids, _ = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.shape[0] == 2
@@ -190,6 +192,23 @@ def test_load_training_vectors_missing_returns_empty(tmp_path):
         s3.create_bucket(Bucket=BUCKET)
         vectors, student_ids, name_image_ids = load_training_vectors(db_path, BUCKET, s3_client=s3)
     assert vectors.size == 0 and student_ids.size == 0 and name_image_ids.size == 0
+
+
+def test_default_embedder_defaults_to_voyage(monkeypatch):
+    monkeypatch.delenv("NAME_EMBEDDER", raising=False)
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    assert isinstance(default_embedder(), RemoteEmbedder)
+
+
+def test_default_embedder_local_override(monkeypatch):
+    monkeypatch.setenv("NAME_EMBEDDER", "local")
+    assert isinstance(default_embedder(), LocalEmbedder)
+
+
+def test_default_embedder_rejects_unknown(monkeypatch):
+    monkeypatch.setenv("NAME_EMBEDDER", "bogus")
+    with pytest.raises(ValueError, match="unknown NAME_EMBEDDER"):
+        default_embedder()
 
 
 def test_crop_to_ink_tightens_to_strokes():
