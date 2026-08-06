@@ -122,13 +122,75 @@ def _select_classroom(key: str, allow_create: bool) -> "storage.ClassroomRecord 
 
 def render_roster() -> None:
     st.write(
-        "Create or select a class, upload a scan of filled-in name-learning "
-        "worksheets to add students to it, then view or remove students."
+        "Create or select a class, then add students by typing them in, "
+        "importing a CSV, or uploading a scan of filled-in name-learning "
+        "worksheets. View or remove students below."
     )
     classroom = _select_classroom("roster_classroom", allow_create=True)
     if classroom is None:
         return
 
+    st.subheader("Add a student")
+    with st.form("add_student_form", clear_on_submit=True):
+        cols = st.columns(3)
+        first_name = cols[0].text_input("First name", key="manual_student_first_name")
+        last_name = cols[1].text_input("Last name", key="manual_student_last_name")
+        nickname = cols[2].text_input("Nickname (optional)", key="manual_student_nickname")
+        add_submitted = st.form_submit_button("Add student", type="primary")
+
+    if add_submitted:
+        if not first_name.strip() or not last_name.strip():
+            st.error("First and last name are required.")
+        else:
+            conn = storage.init_db(DB_PATH)
+            try:
+                student = storage.get_or_create_student(
+                    conn, classroom.id, first_name.strip(), last_name.strip(),
+                    nickname.strip() or None,
+                )
+            finally:
+                conn.close()
+            logger.info(
+                "added student id=%s classroom=%s (manual)", student.id, classroom.id
+            )
+            st.success(f"Added {student.first_name} {student.last_name}.")
+
+    st.divider()
+    st.subheader("Import students from CSV")
+    st.caption(
+        "The CSV needs a header row with `first_name` and `last_name` "
+        "columns, plus an optional `nickname` column (column order and "
+        "case don't matter). Example:"
+    )
+    st.code("first_name,last_name,nickname\nAnna,Smith,\nZeke,Jones,Z", language="text")
+    csv_uploaded = st.file_uploader("Roster CSV", type=["csv"], key="roster_csv_upload")
+    csv_submitted = st.button(
+        "Import CSV", type="primary", disabled=csv_uploaded is None, key="import_csv_button"
+    )
+    if csv_submitted and csv_uploaded is not None:
+        csv_text = csv_uploaded.getvalue().decode("utf-8-sig")
+        conn = storage.init_db(DB_PATH)
+        try:
+            try:
+                result = storage.import_students_csv(conn, classroom.id, csv_text)
+            except ValueError as exc:
+                result = None
+                st.error(str(exc))
+        finally:
+            conn.close()
+        if result is not None:
+            logger.info(
+                "imported students csv classroom=%s added=%d skipped=%d",
+                classroom.id, len(result.added), len(result.skipped),
+            )
+            st.success(f"Added {len(result.added)} student(s) from CSV.")
+            if result.skipped:
+                st.warning(
+                    f"{len(result.skipped)} row(s) were skipped:\n"
+                    + "\n".join(f"- {reason}" for reason in result.skipped)
+                )
+
+    st.divider()
     st.subheader("Upload name-learning worksheets")
     uploaded = st.file_uploader(
         "Scanned PDF or image", type=["pdf", "jpg", "jpeg", "png"], key="roster_upload"

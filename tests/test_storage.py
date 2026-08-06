@@ -26,6 +26,7 @@ from graderbot.storage import (
     get_worksheet_by_public_id,
     image_to_pdf,
     images_to_pdf,
+    import_students_csv,
     init_db,
     insert_name_embedding,
     insert_name_image,
@@ -910,6 +911,95 @@ def test_list_students_scoped_to_classroom(tmp_path):
 
     names = [(s.first_name, s.last_name) for s in list_students(conn, room_a.id)]
     assert names == [("Anna", "Smith")]
+
+
+def test_import_students_csv_adds_students_with_nickname_column(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "first_name,last_name,nickname\nAnna,Smith,\nZeke,Jones,Z\n"
+
+    result = import_students_csv(conn, classroom.id, csv_text)
+
+    assert [(s.first_name, s.last_name, s.nickname) for s in result.added] == [
+        ("Anna", "Smith", None),
+        ("Zeke", "Jones", "Z"),
+    ]
+    assert result.skipped == []
+    assert len(list_students(conn, classroom.id)) == 2
+
+
+def test_import_students_csv_works_without_nickname_column(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "first_name,last_name\nAnna,Smith\n"
+
+    result = import_students_csv(conn, classroom.id, csv_text)
+
+    assert [(s.first_name, s.last_name) for s in result.added] == [("Anna", "Smith")]
+    assert result.skipped == []
+
+
+def test_import_students_csv_is_case_insensitive_to_column_order_and_case(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "Last_Name,First_Name\nSmith,Anna\n"
+
+    result = import_students_csv(conn, classroom.id, csv_text)
+
+    assert [(s.first_name, s.last_name) for s in result.added] == [("Anna", "Smith")]
+
+
+def test_import_students_csv_skips_rows_missing_a_name(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "first_name,last_name\nAnna,Smith\n,Jones\nZeke,\n"
+
+    result = import_students_csv(conn, classroom.id, csv_text)
+
+    assert [(s.first_name, s.last_name) for s in result.added] == [("Anna", "Smith")]
+    assert result.skipped == [
+        "row 3: missing first or last name",
+        "row 4: missing first or last name",
+    ]
+
+
+def test_import_students_csv_ignores_blank_lines(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "first_name,last_name\nAnna,Smith\n\nZeke,Jones\n"
+
+    result = import_students_csv(conn, classroom.id, csv_text)
+
+    assert len(result.added) == 2
+    assert result.skipped == []
+
+
+def test_import_students_csv_is_idempotent_with_existing_students(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    csv_text = "first_name,last_name\nAnna,Smith\nZeke,Jones\n"
+
+    import_students_csv(conn, classroom.id, csv_text)
+
+    assert len(list_students(conn, classroom.id)) == 2
+
+
+def test_import_students_csv_raises_on_missing_required_columns(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    csv_text = "name,nickname\nAnna Smith,\n"
+
+    with pytest.raises(ValueError, match="missing required column"):
+        import_students_csv(conn, classroom.id, csv_text)
+
+
+def test_import_students_csv_raises_on_empty_csv(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+
+    with pytest.raises(ValueError, match="empty"):
+        import_students_csv(conn, classroom.id, "")
 
 
 def test_insert_name_image_and_exists(tmp_path):

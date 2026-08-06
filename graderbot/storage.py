@@ -5,7 +5,9 @@ The SQLite file is expected to be replicated to S3 by litestream
 (`litestream.yml`), which is why `init_db` enables WAL journal mode.
 """
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -65,6 +67,15 @@ class StudentRecord:
     last_name: str
     nickname: Optional[str] = None
     id: Optional[int] = None
+
+
+@dataclass
+class CsvImportResult:
+    """Result of a bulk `import_students_csv` call: the students that were
+    added (or already existed) and the rows that were skipped, with a
+    human-readable reason for each."""
+    added: List[StudentRecord]
+    skipped: List[str]
 
 
 @dataclass
@@ -315,6 +326,72 @@ def get_or_create_student(
     return StudentRecord(
         id=row[0], classroom_id=row[1], first_name=row[2], last_name=row[3], nickname=row[4]
     )
+
+
+_CSV_REQUIRED_COLUMNS = ("first_name", "last_name")
+
+
+def import_students_csv(conn: Connection, classroom_id: int, csv_text: str) -> CsvImportResult:
+    """Bulk-adds students to a classroom from a roster CSV.
+
+    Expected format: a header row containing `first_name` and `last_name`
+    columns, plus an optional `nickname` column. Column order doesn't
+    matter, matching is case-insensitive, and extra columns are ignored.
+    One student per remaining row, e.g.::
+
+        first_name,last_name,nickname
+        Anna,Smith,
+        Zeke,Jones,Z
+
+    Rows missing a first or last name are skipped (reported in
+    `CsvImportResult.skipped`), not fatal. Adding a name that already
+    exists in the classroom is a no-op (`get_or_create_student` is
+    idempotent), so re-importing the same CSV is safe.
+    """
+    reader = csv.reader(io.StringIO(csv_text))
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise ValueError("CSV is empty.")
+
+    normalized = [h.strip().lower() for h in header]
+    missing = [col for col in _CSV_REQUIRED_COLUMNS if col not in normalized]
+    if missing:
+        raise ValueError(
+            f"CSV is missing required column(s): {', '.join(missing)}. "
+            "Expected a header row with 'first_name', 'last_name', "
+            "and optionally 'nickname'."
+        )
+
+    first_idx = normalized.index("first_name")
+    last_idx = normalized.index("last_name")
+    nick_idx = normalized.index("nickname") if "nickname" in normalized else None
+
+    def cell(row: List[str], idx: Optional[int]) -> str:
+        if idx is None or idx >= len(row):
+            return ""
+        return row[idx].strip()
+
+    added: List[StudentRecord] = []
+    skipped: List[str] = []
+    for row_num, row in enumerate(reader, start=2):  # header occupies row 1
+        if not row or all(not field.strip() for field in row):
+            continue  # blank line
+
+        first_name = cell(row, first_idx)
+        last_name = cell(row, last_idx)
+        nickname = cell(row, nick_idx) if nick_idx is not None else ""
+
+        if not first_name or not last_name:
+            skipped.append(f"row {row_num}: missing first or last name")
+            continue
+
+        student = get_or_create_student(
+            conn, classroom_id, first_name, last_name, nickname or None
+        )
+        added.append(student)
+
+    return CsvImportResult(added=added, skipped=skipped)
 
 
 def list_students(conn: Connection, classroom_id: int) -> List[StudentRecord]:
