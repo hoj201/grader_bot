@@ -11,6 +11,8 @@ import pytest
 from graderbot.grading import grade_hw, grade_response, is_correct
 from graderbot.imaging import (
     box_pixel_rect,
+    ink_fraction,
+    is_blank,
     load_pdf_pages_rgb,
     load_scan_pages,
     render_pdf_page_image,
@@ -375,6 +377,57 @@ def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
     assert results == {"q1": QuestionResult(answer="12", response="", correct=False)}
+
+
+def test_grade_hw_skips_mathpix_for_a_blank_box(monkeypatch):
+    # A realistically-sized white canvas so the inset crop is non-degenerate
+    # (unlike the 10x10 canvases above, whose crops round to zero pixels).
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+
+    def fail_if_called(image, box):
+        pytest.fail("read_box (Mathpix) called for a blank box")
+
+    monkeypatch.setattr("graderbot.grading.read_box", fail_if_called)
+
+    results = grade_hw({"q1": "12"}, boxes, image)
+
+    assert results == {"q1": QuestionResult(answer="12", response="", correct=False, blank=True)}
+
+
+def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+    # Draw ink inside the box's pixel rect so it clears the blank threshold.
+    x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
+    cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
+    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "12")
+
+    results = grade_hw({"q1": "12"}, boxes, image)
+
+    assert results == {"q1": QuestionResult(answer="12", response="12", correct=True, blank=False)}
+
+
+def test_ink_fraction_is_zero_for_a_blank_image():
+    blank = np.full((20, 20, 3), 255, dtype=np.uint8)
+    assert ink_fraction(blank) == 0.0
+
+
+def test_ink_fraction_counts_dark_pixels():
+    image = np.full((20, 20, 3), 255, dtype=np.uint8)
+    cv2.rectangle(image, (0, 0), (19, 19), (0, 0, 0), -1)  # fully inked
+    assert ink_fraction(image) == pytest.approx(1.0)
+
+
+def test_is_blank_true_for_a_mostly_white_image():
+    blank = np.full((20, 20, 3), 255, dtype=np.uint8)
+    assert is_blank(blank)
+
+
+def test_is_blank_false_once_ink_exceeds_the_threshold():
+    image = np.full((20, 20, 3), 255, dtype=np.uint8)
+    cv2.rectangle(image, (0, 0), (19, 19), (0, 0, 0), -1)
+    assert not is_blank(image)
 
 
 def test_box_pixel_rect_full_page_box_covers_whole_image():

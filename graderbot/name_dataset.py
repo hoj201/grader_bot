@@ -31,7 +31,7 @@ from typing import Dict, List, NamedTuple, Optional
 import cv2
 import numpy as np
 
-from graderbot.imaging import _crop_box, load_scan_pages
+from graderbot.imaging import _crop_box, is_blank, load_scan_pages
 from graderbot.models import Box
 from graderbot.name_worksheets import _fill_name_template
 from graderbot.ocr import _BOX_INSET, _tesseract_ocr_name
@@ -62,12 +62,6 @@ class IngestResult(NamedTuple):
 
     records: List[NameImageRecord]
     skipped: List[str]
-
-# A grid box with less than this fraction of dark pixels (after the border is
-# inset away by `_BOX_INSET`) is treated as blank and skipped, so unused rows
-# don't become empty "samples". Tune on real scans.
-_INK_THRESHOLD = 128
-_BLANK_INK_FRACTION = 0.005
 
 
 def _log_bucket(bucket: Optional[str]) -> Optional[str]:
@@ -129,11 +123,6 @@ def _split_name(text: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[1]
-
-
-def _ink_fraction(crop: np.ndarray) -> float:
-    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    return float(np.count_nonzero(gray < _INK_THRESHOLD)) / gray.size
 
 
 def ingest_name_sheets(
@@ -229,7 +218,7 @@ def ingest_name_sheets(
 
             for box_id in grid_ids:
                 crop = _crop_box(rectified, boxes[box_id], _BOX_INSET)
-                if crop.size == 0 or _ink_fraction(crop) < _BLANK_INK_FRACTION:
+                if crop.size == 0 or is_blank(crop):
                     continue
 
                 ok, encoded = cv2.imencode(".png", cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))

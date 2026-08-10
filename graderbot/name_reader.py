@@ -30,7 +30,7 @@ from typing import Dict, List, Optional, Protocol, Union
 import numpy as np
 
 from graderbot.embedding import Embedder, default_embedder
-from graderbot.imaging import _crop_box
+from graderbot.imaging import _crop_box, is_blank
 from graderbot.models import Box
 from graderbot.ocr import _BOX_INSET, extract_name_scored
 from graderbot.storage import init_db, list_students
@@ -76,6 +76,10 @@ class OcrNameReader:
     def read_many(self, images: List[np.ndarray], box: Box) -> List[NameGuess]:
         guesses = []
         for image in images:
+            crop = _crop_box(image, box, _BOX_INSET)
+            if crop.size > 0 and is_blank(crop):
+                guesses.append(NameGuess(name="", confidence=0.0, source=OCR_SOURCE))
+                continue
             name, score = extract_name_scored(image, box, self.roster)
             guesses.append(NameGuess(name=name, confidence=score, source=OCR_SOURCE))
         return guesses
@@ -143,11 +147,27 @@ class ClassifierNameReader:
         if not images:
             return []
         crops = [_crop_box(image, box, _BOX_INSET) for image in images]
-        vectors = self.embedder.embed(crops)
+
+        # A blank name box never reaches the embedder/classifier (issue #66)
+        # -- without this check the classifier has no "blank" class to fall
+        # back on and confidently assigns it to whichever student is nearest
+        # in embedding space (issue #62). Only the non-blank crops are
+        # embedded, still in one batched call so a remote embedder is billed
+        # once per group rather than once per page.
+        non_blank_indices = [
+            i for i, crop in enumerate(crops) if not (crop.size > 0 and is_blank(crop))
+        ]
+        guesses = [
+            NameGuess(name="", confidence=0.0, source=CLASSIFIER_SOURCE) for _ in images
+        ]
+        if not non_blank_indices:
+            return guesses
+
+        vectors = self.embedder.embed([crops[i] for i in non_blank_indices])
         predictions = self.classifier.predict(vectors)
         confidences = self._confidences(vectors, predictions)
-        return [
-            NameGuess(
+        for i, student_id, confidence in zip(non_blank_indices, predictions, confidences):
+            guesses[i] = NameGuess(
                 # A predicted id missing from the roster means the model is
                 # stale (student deleted since training); show the raw id
                 # rather than a blank, so the mismatch is visible on the page
@@ -157,8 +177,7 @@ class ClassifierNameReader:
                 source=CLASSIFIER_SOURCE,
                 student_id=int(student_id),
             )
-            for student_id, confidence in zip(predictions, confidences)
-        ]
+        return guesses
 
     def _confidences(self, vectors: np.ndarray, predictions: np.ndarray) -> List[float]:
         """The estimator's own probability for the class it picked. Estimators

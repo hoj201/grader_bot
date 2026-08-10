@@ -15,3 +15,4 @@ class QuestionResult:
     response: str  # what the student wrote, as OCR'd (LaTeX; "" if blank)
     correct: bool
     note: str = ""  # feedback nudge for wrong answers, e.g. "simplify" (issue #38)
+    blank: bool = False  # True if the box was skipped as unanswered (issue #66); markup draws nothing for it

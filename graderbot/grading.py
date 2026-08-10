@@ -5,8 +5,9 @@ from typing import Dict, Iterator, LiteralString, Optional, Tuple, Union
 
 import numpy as np
 
+from graderbot.imaging import _crop_box, is_blank
 from graderbot.models import Box, QuestionResult
-from graderbot.ocr import read_box
+from graderbot.ocr import _BOX_INSET, read_box
 
 _ANSWER_FRAC_PATTERN = re.compile(r"^\\frac\{(-?\d+)\}\{(-?\d+)\}$")
 _DECIMAL_PLACES = 3
@@ -16,12 +17,19 @@ _SIMPLIFY_NOTE = "simplify"
 def grade_hw(answer_key: Dict[LiteralString, LiteralString], boxes: Dict[LiteralString, Box], hw_image: np.ndarray) -> Dict[LiteralString, QuestionResult]:
     """Grades a single student's work, returning a per-question breakdown
     keyed by question id: for each box, the stored `answer`, the student's
-    OCR'd `response`, and whether they match. This granularity is what a
-    marked-up feedback PDF needs (issue #24)."""
+    OCR'd `response`, and whether they match. A box with too little ink to
+    have anything written in it is graded as blank without ever calling
+    Mathpix (issue #66) -- `response` is `""`, `correct` is False, and
+    `blank` is True so a marked-up page can skip drawing anything for it.
+    This granularity is what a marked-up feedback PDF needs (issue #24)."""
     results: Dict[LiteralString, QuestionResult] = {}
     for qid, box in boxes.items():
-        response = read_box(hw_image, box)
         answer = answer_key[qid]
+        crop = _crop_box(hw_image, box, _BOX_INSET)
+        if crop.size > 0 and is_blank(crop):
+            results[qid] = QuestionResult(answer=answer, response="", correct=False, blank=True)
+            continue
+        response = read_box(hw_image, box)
         correct, note = grade_response(response, answer)
         results[qid] = QuestionResult(
             answer=answer, response=response, correct=correct, note=note

@@ -53,6 +53,33 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
     return image[y0:y1, x0:x1]
 
 
+# A crop with less than this fraction of dark pixels is treated as blank --
+# i.e. nothing was written in it. Originally tuned for name-collection grid
+# boxes (name_dataset.ingest_name_sheets); generalized here into the shared
+# preliminary check every box-reading caller (grading, name reading) runs
+# before its expensive step (Mathpix/Tesseract/embed+predict), so a blank box
+# skips that work entirely (issue #66, #62).
+_INK_THRESHOLD = 128
+_BLANK_INK_FRACTION = 0.005
+
+
+def ink_fraction(image: np.ndarray) -> float:
+    """Fraction of `image`'s pixels darker than `_INK_THRESHOLD` (after
+    converting to grayscale) -- a cheap proxy for how much was written on
+    this crop, with no OCR/embedding call involved. `image` must be
+    non-empty; a caller with a possibly zero-size crop (`_crop_box` can
+    return one for a tiny/edge-case box) must check `image.size > 0` itself
+    first, same as `is_blank` below."""
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    return float(np.count_nonzero(gray < _INK_THRESHOLD)) / gray.size
+
+
+def is_blank(image: np.ndarray, threshold: float = _BLANK_INK_FRACTION) -> bool:
+    """True if `image` has too little ink to have anything meaningfully
+    written on it. Same non-empty-input requirement as `ink_fraction`."""
+    return ink_fraction(image) < threshold
+
+
 def render_pdf_page_image(pdf_filename: str, dpi: int = _WORKSHEET_RENDER_DPI, page_index: int = 0) -> np.ndarray:
     """Rasterizes a single page of `pdf_filename` at `dpi` and returns it
     as an RGB numpy array. The effective dpi is clamped so neither side of

@@ -248,9 +248,9 @@ def mark_scan(
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
-    scan, each stamped with a score header and the correct answers beside the
-    wrong ones. `on_step` streams per-page progress (see `_grade_batch`). Returns
-    the same `ScanBatchResult` (scans that were unreadable or whose worksheet is
+    scan, each showing the correct answers beside the wrong ones. `on_step`
+    streams per-page progress (see `_grade_batch`). Returns the same
+    `ScanBatchResult` (scans that were unreadable or whose worksheet is
     unknown contribute no page). No PDF is written if nothing graded."""
     conn = init_db(Path(db_path))
     try:

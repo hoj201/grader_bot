@@ -84,28 +84,37 @@ def test_render_marked_page_draws_no_note_when_absent(page, monkeypatch):
     render_marked_page(image, results, boxes)
 
 
-def test_render_marked_page_stamps_score_header(page, monkeypatch):
+def test_render_marked_page_has_no_score_header():
+    # Issue #66: the marked-up page must never stamp a score at the top.
+    import inspect
+
+    assert not hasattr(markup, "_draw_score_header")
+    assert "draw_score" not in inspect.signature(render_marked_page).parameters
+
+
+def test_render_marked_page_draws_nothing_for_a_blank_result(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.2, 0.1)}
+    results = {"q1": QuestionResult(answer="7", response="", correct=False, blank=True)}
+    for name in ("_draw_check", "_draw_cross", "_draw_answer", "_draw_note"):
+        monkeypatch.setattr(
+            markup, name, lambda *a, name=name, **k: pytest.fail(f"{name} drawn for a blank result")
+        )
+
+    marked = render_marked_page(image, results, boxes)
+
+    assert np.all(marked == 255)
+
+
+def test_render_marked_page_still_marks_non_blank_questions_when_mixed_with_blank(page):
     image, results, boxes = page
-    calls = []
+    boxes["q3"] = Box(0.1, 0.1, 0.2, 0.1)
+    results["q3"] = QuestionResult(answer="9", response="", correct=False, blank=True)
 
-    def fake_header(img, correct, total):
-        calls.append((correct, total))
+    marked = render_marked_page(image, results, boxes)
 
-    monkeypatch.setattr(markup, "_draw_score_header", fake_header)
-
-    render_marked_page(image, results, boxes)
-
-    # One correct (q1), one wrong (q2) out of two questions.
-    assert calls == [(1, 2)]
-
-
-def test_render_marked_page_can_skip_score_header(page, monkeypatch):
-    image, results, boxes = page
-    monkeypatch.setattr(
-        markup, "_draw_score_header", lambda *a: pytest.fail("score header drawn")
-    )
-
-    render_marked_page(image, results, boxes, draw_score=False)
+    assert _has_pixel(marked, _CORRECT_COLOR)  # q1 still checked
+    assert _has_pixel(marked, _WRONG_COLOR)  # q2 still crossed
 
 
 def test_save_marked_pdf_writes_single_page(page, tmp_path):

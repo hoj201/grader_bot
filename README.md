@@ -271,8 +271,8 @@ student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45)
 classifier (see above). Each graded page's QR code is matched to its stored
 worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
-as per-student JSON results and as a single marked-up PDF (a score header on
-each page, correct answers written beside the wrong ones). It requires
+as per-student JSON results and as a single marked-up PDF (correct answers
+written beside the wrong ones). It requires
 `S3_BUCKET` and `ANTHROPIC_API_KEY` to be set (see
 above); it reads/writes the same `worksheets.sqlite3` database as the CLI by
 default (override with the `WORKSHEETS_DB_PATH` env var). Run it from the repo

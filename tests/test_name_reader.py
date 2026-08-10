@@ -30,6 +30,10 @@ def _page(text: str = "Anna Smith") -> np.ndarray:
     return img
 
 
+def _blank_page() -> np.ndarray:
+    return np.full((120, 400, 3), 255, np.uint8)
+
+
 class _FakeEmbedder:
     """Embeds each crop to a fixed vector, recording how many batches it saw --
     the point being that a whole worksheet group costs one call, not one per
@@ -91,6 +95,18 @@ def test_ocr_name_reader_returns_one_guess_per_page(monkeypatch):
     assert [g.name for g in guesses] == ["Anna Smith"] * 3
 
 
+def test_ocr_name_reader_skips_tesseract_for_a_blank_box(monkeypatch):
+    def fail_if_called(image):
+        pytest.fail("tesseract called on a blank name box")
+
+    monkeypatch.setattr(ocr, "_tesseract_ocr_name", fail_if_called)
+    reader = OcrNameReader(["Anna Smith"])
+
+    [guess] = reader.read_many([_blank_page()], FULL_BOX)
+
+    assert guess == NameGuess(name="", confidence=0.0, source=OCR_SOURCE)
+
+
 # --------------------------------------------------------------------------
 # ClassifierNameReader
 
@@ -125,6 +141,36 @@ def test_classifier_name_reader_embeds_the_whole_batch_in_one_call():
     reader.read_many([_page()] * 4, FULL_BOX)
 
     assert embedder.calls == 1
+
+
+def test_classifier_name_reader_skips_embed_for_a_blank_box():
+    embedder = _FakeEmbedder([])
+    reader = ClassifierNameReader(_fitted_classifier(), {11: "Anna Smith"}, embedder)
+
+    [guess] = reader.read_many([_blank_page()], FULL_BOX)
+
+    assert guess == NameGuess(name="", confidence=0.0, source=CLASSIFIER_SOURCE)
+    assert embedder.calls == 0
+
+
+def test_classifier_name_reader_reassembles_a_mixed_batch_in_order():
+    # Only the two non-blank pages should ever reach the embedder, and each
+    # guess must land back at its original index (issue #66, #62).
+    embedder = _FakeEmbedder([[1.0, 0.0], [0.0, 1.0]])
+    reader = ClassifierNameReader(
+        _fitted_classifier(), {11: "Anna Smith", 22: "Zeke Jones"}, embedder
+    )
+
+    guesses = reader.read_many(
+        [_blank_page(), _page(), _blank_page(), _page(text="Zeke Jones")], FULL_BOX
+    )
+
+    assert embedder.calls == 1
+    assert [g.source for g in guesses] == [CLASSIFIER_SOURCE] * 4
+    assert guesses[0] == NameGuess(name="", confidence=0.0, source=CLASSIFIER_SOURCE)
+    assert guesses[2] == NameGuess(name="", confidence=0.0, source=CLASSIFIER_SOURCE)
+    assert guesses[1].name == "Anna Smith"
+    assert guesses[3].name == "Zeke Jones"
 
 
 def test_classifier_name_reader_confidence_reflects_neighbour_agreement():
