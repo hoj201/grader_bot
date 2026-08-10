@@ -324,6 +324,54 @@ def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
     assert len(vectorize_calls) == 1
 
 
+def test_roster_tab_shows_error_when_vectorization_fails(tmp_path, monkeypatch):
+    from graderbot.name_dataset import IngestResult
+    from graderbot.storage import NameImageRecord
+
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    storage.get_or_create_classroom(conn, "Room 101")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    fake_result = IngestResult(
+        records=[
+            NameImageRecord(
+                student_id=1,
+                box_id="box-0",
+                image_s3url="https://bucket.s3.amazonaws.com/name_images/1.png",
+                image_sha256="deadbeef",
+            )
+        ],
+        skipped=[],
+    )
+    monkeypatch.setattr(
+        "graderbot.name_dataset.ingest_name_sheets", lambda *args, **kwargs: fake_result
+    )
+
+    def raise_vectorize_error(*args, **kwargs):
+        raise EnvironmentError("VOYAGE_API_KEY is not set")
+
+    monkeypatch.setattr("graderbot.embedding.vectorize_samples", raise_vectorize_error)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Scanned PDF" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    button = next(b for b in at.button if b.label == "Ingest")
+    button.click().run()
+
+    # The failure must be surfaced legibly, not as an unhandled traceback,
+    # and the earlier (already-persisted) ingest success should still show.
+    assert not at.exception
+    successes = " ".join(s.value for s in at.success)
+    assert "Ingested 1 handwriting sample" in successes
+    errors = " ".join(e.value for e in at.error)
+    assert "embedding failed" in errors
+    assert "VOYAGE_API_KEY is not set" in errors
+
+
 def test_roster_tab_manual_add_student_creates_student(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)

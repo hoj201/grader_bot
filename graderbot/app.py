@@ -130,6 +130,15 @@ def render_roster() -> None:
     if classroom is None:
         return
 
+    # Ingest below ends with st.rerun() (to refresh the file uploader and
+    # roster list), which discards any st.success/warning/error called
+    # earlier in that same run. Stash them in session_state instead and
+    # flush them here, on the run right after the rerun.
+    flash = st.session_state.pop("roster_flash", None)
+    if flash:
+        for kind, message in flash:
+            getattr(st, kind)(message)
+
     st.subheader("Add a student")
     with st.form("add_student_form", clear_on_submit=True):
         cols = st.columns(3)
@@ -213,19 +222,40 @@ def render_roster() -> None:
                 )
                 status.update(label="Embedding handwriting samples...")
                 st.write("Embedding handwriting samples...")
-                num_vectorized = embedding.vectorize_samples(DB_PATH, bucket=BUCKET)
-                status.update(label="Done", state="complete")
+                try:
+                    num_vectorized = embedding.vectorize_samples(DB_PATH, bucket=BUCKET)
+                except Exception as exc:
+                    num_vectorized = None
+                    vectorize_error = str(exc)
+                    status.update(label="Embedding failed", state="error")
+                else:
+                    vectorize_error = None
+                    status.update(label="Done", state="complete")
 
         logger.info(
-            "ingest_name_sheets classroom=%s ingested=%d skipped=%d vectorized=%d",
-            classroom.id, len(result.records), len(result.skipped), num_vectorized,
+            "ingest_name_sheets classroom=%s ingested=%d skipped=%d vectorized=%s",
+            classroom.id, len(result.records), len(result.skipped),
+            num_vectorized if vectorize_error is None else "failed",
         )
-        st.success(f"Ingested {len(result.records)} handwriting sample(s).")
+        flash: list[tuple[str, str]] = [
+            ("success", f"Ingested {len(result.records)} handwriting sample(s).")
+        ]
         if result.skipped:
-            st.warning(
+            flash.append((
+                "warning",
                 f"{len(result.skipped)} page(s) were skipped:\n"
-                + "\n".join(f"- {reason}" for reason in result.skipped)
-            )
+                + "\n".join(f"- {reason}" for reason in result.skipped),
+            ))
+        if vectorize_error is not None:
+            flash.append((
+                "error",
+                "Handwriting samples were saved, but embedding failed: "
+                f"{vectorize_error}\nStudents were added without name "
+                "embeddings; re-upload the same scan to retry once the "
+                "problem is fixed (already-embedded samples are skipped, "
+                "so this is safe to repeat).",
+            ))
+        st.session_state["roster_flash"] = flash
         st.rerun()
 
     st.divider()
