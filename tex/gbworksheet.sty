@@ -158,6 +158,25 @@
 % ============================================================
 % Draw registration markers
 % ============================================================
+%
+% \WorksheetMarkers itself only draws once, wherever it's invoked from -- a
+% tikz `remember picture, overlay` node is positioned relative to whichever
+% page it's typeset on. \WorksheetHeader/\WorksheetNameHeader call it inline
+% just once near the top of the document, so on a multi-page worksheet only
+% page 1 got registration markers -- rectify_to_canonical (and the QR-id
+% decode alongside it) then fails on every later page during grading. Instead
+% of calling \WorksheetMarkers directly, they register it on the LaTeX2e
+% shipout/background hook (\worksheet@EnsureMarkersOnEveryPage below), which
+% fires fresh for every page shipout, so every page gets its own markers.
+\newif\ifworksheet@markershookadded
+\worksheet@markershookaddedfalse
+
+\newcommand{\worksheet@EnsureMarkersOnEveryPage}{%
+    \ifworksheet@markershookadded\else
+        \AddToHook{shipout/background}{\WorksheetMarkers}%
+        \worksheet@markershookaddedtrue
+    \fi
+}
 
 \newcommand{\WorksheetMarkers}{%
 \begin{tikzpicture}[remember picture,overlay]
@@ -263,7 +282,7 @@
 
 \newcommand{\WorksheetHeader}{%
 
-\WorksheetMarkers
+\worksheet@EnsureMarkersOnEveryPage
 
 \vspace*{0.5in}
 
@@ -350,7 +369,7 @@
 % `printedname` box in cv mode), then the copying instructions.
 \newcommand{\WorksheetNameHeader}{%
 
-\WorksheetMarkers
+\worksheet@EnsureMarkersOnEveryPage
 
 \vspace*{0.5in}
 
