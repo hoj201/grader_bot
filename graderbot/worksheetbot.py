@@ -65,6 +65,7 @@ class Question:
     id: str
     text: str
     answer: str
+    open_ended: bool = False  # True if there's no single correct answer (issue #65); never graded right/wrong
 
 
 @dataclass
@@ -88,7 +89,7 @@ no markdown fences, no commentary.
 
 Output schema (a JSON array):
 [
-  {"id": "1", "text": "<question text, real LaTeX>", "answer": "<final answer>"}
+  {"id": "1", "text": "<question text, real LaTeX>", "answer": "<final answer>", "open_ended": false}
 ]
 
 Rules:
@@ -102,6 +103,12 @@ Rules:
 - Answers must be a plain number (e.g. "12", "1.5") or a LaTeX fraction
   written as \\frac{a}{b} (e.g. "\\frac{3}{4}") — never a bare "a/b" slash
   expression, and never a worked solution or justification.
+- Most questions have exactly one correct answer, so "open_ended" is false
+  for them. Only when the prompt itself calls for a question with no single
+  correct answer (e.g. an opinion or reflection prompt like "How do you feel
+  about fractions?") should you set "open_ended": true and "answer": "" —
+  never guess an arbitrary "correct" answer for a genuinely open-ended
+  question just to fill the field.
 - Vary question difficulty and phrasing; avoid near-duplicate questions.
 - Match the count, topic, and difficulty level requested in the prompt exactly.
 """
@@ -126,7 +133,10 @@ def generate_questions(
     on_step("Received response from Claude", raw)
     data = _parse_json_array(raw)
 
-    questions = [Question(id=str(q["id"]), text=q["text"], answer=q["answer"]) for q in data]
+    questions = [
+        Question(id=str(q["id"]), text=q["text"], answer=q["answer"], open_ended=bool(q.get("open_ended", False)))
+        for q in data
+    ]
     if len(questions) != num_questions:
         on_step(
             f"warning: requested {num_questions} questions, got {len(questions)}"
@@ -589,7 +599,9 @@ def parse_questions_json(raw: str) -> "list[Question]":
                 f"Question at index {i} must be an object with "
                 f'"id", "text", and "answer" keys.'
             )
-        questions.append(Question(id=str(q["id"]), text=q["text"], answer=q["answer"]))
+        questions.append(
+            Question(id=str(q["id"]), text=q["text"], answer=q["answer"], open_ended=bool(q.get("open_ended", False)))
+        )
     return questions
 
 

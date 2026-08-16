@@ -395,6 +395,38 @@ def test_grade_hw_skips_mathpix_for_a_blank_box(monkeypatch):
     assert results == {"q1": QuestionResult(answer="12", response="", correct=False, blank=True)}
 
 
+def test_grade_hw_never_grades_an_open_ended_question(monkeypatch):
+    # issue #65: an open-ended question's response is captured but never
+    # compared against the stored answer, even when it plainly disagrees.
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+    x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
+    cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
+    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "I like fractions")
+
+    results = grade_hw({"q1": ""}, boxes, image, open_ended={"q1": True})
+
+    assert results == {
+        "q1": QuestionResult(answer="", response="I like fractions", correct=False, open_ended=True)
+    }
+
+
+def test_grade_hw_skips_mathpix_for_a_blank_open_ended_box(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+
+    def fail_if_called(image, box):
+        pytest.fail("read_box (Mathpix) called for a blank box")
+
+    monkeypatch.setattr("graderbot.grading.read_box", fail_if_called)
+
+    results = grade_hw({"q1": ""}, boxes, image, open_ended={"q1": True})
+
+    assert results == {
+        "q1": QuestionResult(answer="", response="", correct=False, blank=True, open_ended=True)
+    }
+
+
 def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
     image = np.full((200, 200, 3), 255, dtype=np.uint8)
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}

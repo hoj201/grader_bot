@@ -565,7 +565,7 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
     assert record.model == "claude-sonnet-4-6"
     assert record.num_questions == 1
     assert record.tex_source == tex_path.read_text()
-    assert record.questions_json == '[{"id": "1", "text": "1+1=?", "answer": "2"}]'
+    assert record.questions_json == '[{"id": "1", "text": "1+1=?", "answer": "2", "open_ended": false}]'
     assert record.student_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_student.pdf"
     assert record.cv_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_cv.pdf"
     assert record.answers_pdf_s3url == "https://graderbot-test-bucket.s3.amazonaws.com/ws_abcd1234/worksheet_answers.pdf"
@@ -579,6 +579,43 @@ def test_store_worksheet_orchestrates_compile_upload_and_insert(tmp_path):
         "SELECT content FROM STY_VERSION WHERE hash = ?", (record.sty_hash,)
     ).fetchone()
     assert sty_row == (WORKSHEET_STY_PATH.read_text(),)
+
+
+def test_store_worksheet_excludes_open_ended_questions_from_answer_key(tmp_path):
+    # issue #65: an open-ended question has nothing to reveal, so it must be
+    # left out of the answer key passed to generate_answer_key_pdf.
+    tex_path = tmp_path / "worksheet.tex"
+    tex_path.write_text(r"\documentclass{article}\begin{document}hi\end{document}")
+    db_path = tmp_path / "worksheets.sqlite3"
+    questions = [
+        Question(id="1", text="1+1=?", answer="2"),
+        Question(id="2", text="How do you feel about math?", answer="", open_ended=True),
+    ]
+
+    student_pdf = tmp_path / "build_blank" / "worksheet.pdf"
+    cv_pdf = tmp_path / "build_cv" / "worksheet.pdf"
+    answers_pdf = tmp_path / "answers.pdf"
+
+    def fake_latexmk(tex_filename, cv_mode):
+        return str(cv_pdf if cv_mode else student_pdf)
+
+    sample_boxes = {"1": Box(0.1, 0.2, 0.3, 0.1), "2": Box(0.1, 0.4, 0.3, 0.1), "name": Box(0.1, 0.9, 0.4, 0.05)}
+
+    with patch("graderbot.storage.latexmk_worksheet", side_effect=fake_latexmk), \
+         patch("graderbot.storage.generate_answer_key_pdf", return_value=answers_pdf) as mock_answer_key, \
+         patch("graderbot.storage.extract_answer_boxes", return_value=sample_boxes), \
+         patch("graderbot.storage.upload_to_s3", side_effect=lambda path, bucket, key, s3_client=None: f"https://{bucket}.s3.amazonaws.com/{key}"):
+        store_worksheet(
+            tex_path=tex_path,
+            questions=questions,
+            prompt="worksheet with a reflection question",
+            model="claude-sonnet-4-6",
+            bucket="graderbot-test-bucket",
+            db_path=db_path,
+            public_id="ws_abcd1234",
+        )
+
+    mock_answer_key.assert_called_once_with(str(tex_path), {"1": "2"}, tmp_path / "worksheet_answers.pdf")
 
 
 def test_store_worksheet_uses_slugified_title_as_filename_prefix(tmp_path):

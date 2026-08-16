@@ -72,6 +72,22 @@ def test_generate_questions_repairs_unescaped_latex_backslashes():
     assert questions == [Question(id="1", text=r"$8 \div 4 = ?$", answer="2")]
 
 
+def test_generate_questions_parses_open_ended_flag():
+    # issue #65: the model can mark a question open-ended (no correct answer).
+    data = [
+        {"id": "1", "text": "How do you feel about fractions?", "answer": "", "open_ended": True},
+        {"id": "2", "text": "2 + 2 = ?", "answer": "4"},
+    ]
+    client = _fake_client(json.dumps(data))
+
+    questions = generate_questions(client, "reflection worksheet", 2)
+
+    assert questions == [
+        Question(id="1", text="How do you feel about fractions?", answer="", open_ended=True),
+        Question(id="2", text="2 + 2 = ?", answer="4", open_ended=False),
+    ]
+
+
 def test_generate_questions_warns_on_count_mismatch(capsys):
     data = [{"id": "1", "text": "1 + 1 = ?", "answer": "2"}]
     client = _fake_client(json.dumps(data))
@@ -571,6 +587,20 @@ def test_parse_questions_json_parses_plain_array():
     assert parse_questions_json(raw) == [
         Question(id="1", text="2 + 2 = ?", answer="4"),
         Question(id="2", text="3 * 3 = ?", answer="9"),
+    ]
+
+
+def test_parse_questions_json_parses_open_ended_flag():
+    raw = json.dumps(
+        [
+            {"id": "1", "text": "How do you feel about fractions?", "answer": "", "open_ended": True},
+            {"id": "2", "text": "2 + 2 = ?", "answer": "4"},
+        ]
+    )
+
+    assert parse_questions_json(raw) == [
+        Question(id="1", text="How do you feel about fractions?", answer="", open_ended=True),
+        Question(id="2", text="2 + 2 = ?", answer="4", open_ended=False),
     ]
 
 

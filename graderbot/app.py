@@ -575,6 +575,9 @@ def _render_create_from_json() -> None:
         placeholder='[{"id": "1", "text": "$2+2=$", "answer": "4"}, '
         '{"id": "2", "text": "$\\\\frac{1}{2}+\\\\frac{1}{4}=$", "answer": "\\\\frac{3}{4}"}]',
         key="manual_questions_json",
+        help='Add "open_ended": true (and leave "answer": "") to a question '
+        "with no single correct answer, e.g. an opinion/reflection prompt -- "
+        "it's shown to students normally but never marked right or wrong.",
     )
     title = st.text_input("Title", key="manual_title", placeholder="Required")
     header = st.text_area(

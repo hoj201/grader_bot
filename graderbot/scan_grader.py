@@ -159,7 +159,9 @@ def _grade_batch(
             )
             continue
 
-        answer_key = {q["id"]: q["answer"] for q in json.loads(record.questions_json)}
+        questions_data = json.loads(record.questions_json)
+        answer_key = {q["id"]: q["answer"] for q in questions_data}
+        open_ended_key = {q["id"]: q.get("open_ended", False) for q in questions_data}
         boxes = deserialize_boxes(record.boxes_json)
         name_box = boxes.get(_NAME_BOX_ID)
         question_boxes = {
@@ -175,13 +177,14 @@ def _grade_batch(
 
         student_results: Dict[str, StudentResults] = {}
         for (label, image), guess in zip(items, guesses):
-            results = grade_hw(answer_key, question_boxes, image)
+            results = grade_hw(answer_key, question_boxes, image, open_ended_key)
             student_results[guess.name] = results
-            n_correct = sum(1 for r in results.values() if r.correct)
+            graded = [r for r in results.values() if not r.open_ended]
+            n_correct = sum(1 for r in graded if r.correct)
             on_step(
                 f"{label}: graded {guess.name or '(no name)'} "
                 f"[{guess.source} {guess.confidence:.0%}] -- "
-                f"{n_correct}/{len(results)} correct."
+                f"{n_correct}/{len(graded)} correct."
             )
             result.name_predictions.append(
                 NamePrediction(

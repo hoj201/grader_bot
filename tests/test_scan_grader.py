@@ -81,8 +81,10 @@ def patched_cv(monkeypatch):
 
     monkeypatch.setattr(scan_grader, "OcrNameReader", _StubOcrNameReader)
 
-    def fake_grade_hw(answer_key, boxes, image):
-        grade_hw_calls.append({"answer_key": answer_key, "boxes": boxes, "image": image})
+    def fake_grade_hw(answer_key, boxes, image, open_ended=None):
+        grade_hw_calls.append(
+            {"answer_key": answer_key, "boxes": boxes, "image": image, "open_ended": open_ended}
+        )
         # A perfect paper: response == answer for every question box.
         return {
             qid: QuestionResult(answer=answer_key[qid], response=answer_key[qid], correct=True)
@@ -114,6 +116,39 @@ def test_grade_scans_uses_stored_answer_key_and_excludes_name_box(
     assert call["answer_key"] == {"q1": "2", "q2": "4"}
     # The name box must not be graded as a question.
     assert set(call["boxes"]) == {"q1", "q2"}
+
+
+def test_grade_scans_passes_open_ended_flags_to_grade_hw(tmp_path, patched_cv):
+    # issue #65: a stored open-ended question must be flagged for grade_hw
+    # so it never gets compared against its (empty) answer.
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = init_db(db_path)
+    boxes = serialize_boxes(
+        {
+            "name": Box(0.1, 0.9, 0.4, 0.05),
+            "q1": Box(0.1, 0.5, 0.3, 0.05),
+            "q2": Box(0.1, 0.4, 0.3, 0.05),
+        }
+    )
+    insert_worksheet(
+        conn,
+        _sample_record(
+            public_id="ws_1",
+            boxes_json=boxes,
+            questions_json=json.dumps(
+                [
+                    {"id": "q1", "text": "1+1", "answer": "2"},
+                    {"id": "q2", "text": "How do you feel about math?", "answer": "", "open_ended": True},
+                ]
+            ),
+        ),
+    )
+    conn.close()
+
+    grade_scans(["alice.png"], roster=["Alice Smith"], db_path=db_path)
+
+    call = patched_cv[0]
+    assert call["open_ended"] == {"q1": False, "q2": True}
 
 
 def test_grade_scans_results_are_per_question(db_with_two_worksheets, patched_cv):

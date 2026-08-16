@@ -717,7 +717,10 @@ def store_worksheet(
     # the DB alone, without re-rendering the cv worksheet at grade time.
     boxes_json = serialize_boxes(extract_answer_boxes(cv_pdf))
 
-    answers = {q.id: q.answer for q in questions}
+    # Open-ended questions (issue #65) have nothing to reveal, so they're left
+    # off the answer key -- fill_worksheet skips any box id absent from
+    # `answers`, so those boxes simply stay blank on the rendered PDF.
+    answers = {q.id: q.answer for q in questions if not q.open_ended}
     answers_pdf_path = tex_path.with_name(f"{stem}_answers.pdf")
     answers_pdf = generate_answer_key_pdf(str(tex_path), answers, answers_pdf_path)
 

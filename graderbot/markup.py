@@ -70,13 +70,15 @@ def render_marked_page(
     `result.blank`), draws a green check (correct) or red cross (incorrect)
     just right of the answer box; for wrong answers, writes the correct
     answer beside the mark. A blank box gets no markup at all -- no check,
-    cross, answer, or note (issue #66)."""
+    cross, answer, or note (issue #66). Same for an open-ended question
+    (`result.open_ended`) -- it has no correct answer to check against, so
+    nothing is drawn for it either (issue #65)."""
     marked = np.ascontiguousarray(image).copy()
     height, width = marked.shape[:2]
 
     for qid, result in results.items():
         box = boxes.get(qid)
-        if box is None or result.blank:
+        if box is None or result.blank or result.open_ended:
             continue
 
         x0, y0, x1, y1 = box_pixel_rect(box, width, height)

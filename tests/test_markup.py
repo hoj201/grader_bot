@@ -117,6 +117,33 @@ def test_render_marked_page_still_marks_non_blank_questions_when_mixed_with_blan
     assert _has_pixel(marked, _WRONG_COLOR)  # q2 still crossed
 
 
+def test_render_marked_page_draws_nothing_for_an_open_ended_result(monkeypatch):
+    # issue #65: an open-ended question has no correct answer to check
+    # against, so markup must treat it like a blank result -- draw nothing.
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.2, 0.1)}
+    results = {"q1": QuestionResult(answer="", response="I like fractions", correct=False, open_ended=True)}
+    for name in ("_draw_check", "_draw_cross", "_draw_answer", "_draw_note"):
+        monkeypatch.setattr(
+            markup, name, lambda *a, name=name, **k: pytest.fail(f"{name} drawn for an open-ended result")
+        )
+
+    marked = render_marked_page(image, results, boxes)
+
+    assert np.all(marked == 255)
+
+
+def test_render_marked_page_still_marks_non_open_ended_questions_when_mixed_with_open_ended(page):
+    image, results, boxes = page
+    boxes["q3"] = Box(0.1, 0.1, 0.2, 0.1)
+    results["q3"] = QuestionResult(answer="", response="I like fractions", correct=False, open_ended=True)
+
+    marked = render_marked_page(image, results, boxes)
+
+    assert _has_pixel(marked, _CORRECT_COLOR)  # q1 still checked
+    assert _has_pixel(marked, _WRONG_COLOR)  # q2 still crossed
+
+
 def test_save_marked_pdf_writes_single_page(page, tmp_path):
     image, results, boxes = page
     out_path = tmp_path / "marked.pdf"
