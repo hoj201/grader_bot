@@ -16,6 +16,11 @@
 \RequirePackage{xcolor}
 \RequirePackage{calc}
 \RequirePackage{etoolbox}
+% amsmath: LLM-generated question/answer text is inserted verbatim and is
+% told to use "real LaTeX math notation" (worksheetbot.py's
+% GENERATION_SYSTEM_PROMPT), which includes constructs like \text{...} that
+% plain LaTeX doesn't define. Without this, such questions fail to compile.
+\RequirePackage{amsmath}
 
 \usetikzlibrary{calc}
 
