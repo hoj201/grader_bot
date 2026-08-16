@@ -450,6 +450,28 @@ class CompileError(Exception):
         super().__init__(log_tail)
 
 
+def generate_worksheet_document(
+    client: anthropic.Anthropic,
+    prompt: str,
+    num_questions: int,
+    title: Optional[str] = None,
+    header: Optional[str] = None,
+    model: str = MODEL,
+    on_step: OnStep = _print_step,
+) -> "WorksheetDocument":
+    """Runs just the prompt -> questions/title/header generation step,
+    stopping short of LaTeX/compile/storage (issue #68: lets a caller show
+    the generated JSON for approval before committing to a build). `title`/
+    `header` are generated from the prompt when not given.
+    """
+    questions = generate_questions(client, prompt, num_questions, model=model, on_step=on_step)
+    if title is None:
+        title = generate_title(client, prompt, model=model, on_step=on_step)
+    if header is None:
+        header = generate_header(client, prompt, model=model, on_step=on_step)
+    return WorksheetDocument(title=title, header=header, questions=questions)
+
+
 def generate_worksheet(
     client: anthropic.Anthropic,
     template_path: Path,
@@ -475,12 +497,9 @@ def generate_worksheet(
     `bucket` is set), since both are rendered into the worksheet body itself
     (issue #42), not only used for storage/filenames.
     """
-    questions = generate_questions(client, prompt, num_questions, model=model, on_step=on_step)
-    if title is None:
-        title = generate_title(client, prompt, model=model, on_step=on_step)
-    if header is None:
-        header = generate_header(client, prompt, model=model, on_step=on_step)
-    document = WorksheetDocument(title=title, header=header, questions=questions)
+    document = generate_worksheet_document(
+        client, prompt, num_questions, title=title, header=header, model=model, on_step=on_step
+    )
     return build_worksheet(
         document,
         template_path,

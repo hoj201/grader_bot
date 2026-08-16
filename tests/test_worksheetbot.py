@@ -20,6 +20,7 @@ from graderbot.worksheetbot import (
     generate_questions,
     generate_title,
     generate_worksheet,
+    generate_worksheet_document,
     parse_questions_json,
     render_questions,
     repair_tex,
@@ -430,6 +431,79 @@ def _client_with_responses(*raw_texts: str) -> MagicMock:
         SimpleNamespace(content=[SimpleNamespace(type="text", text=text)]) for text in raw_texts
     ]
     return client
+
+
+# --------------------------------------------------------------------------
+# generate_worksheet_document (issue #68: generation stops short of compile
+# so the caller can show it for approval first)
+# --------------------------------------------------------------------------
+
+def test_generate_worksheet_document_generates_questions_title_and_header():
+    client = _client_with_responses(
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title", "Auto Header"
+    )
+
+    document = generate_worksheet_document(client, "arithmetic", num_questions=1)
+
+    assert document.questions == [Question(id="1", text="1+1=?", answer="2")]
+    assert document.title == "Auto Title"
+    assert document.header == "Auto Header"
+
+
+def test_generate_worksheet_document_uses_explicit_title_and_header_without_generating():
+    client = _questions_client()
+
+    with patch("graderbot.worksheetbot.generate_title") as mock_generate_title, patch(
+        "graderbot.worksheetbot.generate_header"
+    ) as mock_generate_header:
+        document = generate_worksheet_document(
+            client, "arithmetic", num_questions=1, title="Given Title", header="Given Header"
+        )
+
+    mock_generate_title.assert_not_called()
+    mock_generate_header.assert_not_called()
+    assert document.title == "Given Title"
+    assert document.header == "Given Header"
+
+
+def test_generate_worksheet_document_does_not_touch_latex_or_storage():
+    client = _client_with_responses(
+        json.dumps([{"id": "1", "text": "1+1=?", "answer": "2"}]), "Auto Title", "Auto Header"
+    )
+
+    with patch("graderbot.worksheetbot.compile_tex") as mock_compile, patch(
+        "graderbot.worksheetbot.storage.store_worksheet"
+    ) as mock_store:
+        generate_worksheet_document(client, "arithmetic", num_questions=1)
+
+    mock_compile.assert_not_called()
+    mock_store.assert_not_called()
+
+
+def test_generate_worksheet_uses_generate_worksheet_document(tmp_path):
+    """generate_worksheet delegates its generation step to
+    generate_worksheet_document rather than duplicating it."""
+    client = _questions_client()
+    template_path = _template(tmp_path)
+    out = tmp_path / "worksheet"
+    document = WorksheetDocument(
+        title="Stub Title",
+        header="Stub Header",
+        questions=[Question(id="1", text="1+1=?", answer="2")],
+    )
+
+    with patch(
+        "graderbot.worksheetbot.generate_worksheet_document", return_value=document
+    ) as mock_generate_document, patch("graderbot.worksheetbot.compile_tex", return_value=(True, "")):
+        tex_path, questions, record = generate_worksheet(
+            client, template_path, "arithmetic", out, num_questions=1, max_repairs=3
+        )
+
+    mock_generate_document.assert_called_once_with(
+        client, "arithmetic", 1, title=None, header=None, model=MODEL, on_step=ANY
+    )
+    assert questions == document.questions
+    assert tex_path.exists()
 
 
 def test_generate_worksheet_writes_tex_and_returns_no_record_without_bucket(tmp_path):

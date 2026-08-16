@@ -7,6 +7,7 @@ Requires ANTHROPIC_API_KEY, S3_BUCKET, and AWS credentials in the
 environment (see README.md).
 """
 
+import json
 import logging
 import os
 import subprocess
@@ -29,8 +30,9 @@ from graderbot.scan_grader import mark_scan, results_by_student
 from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
     CompileError,
+    build_worksheet,
     create_worksheet_from_questions,
-    generate_worksheet,
+    generate_worksheet_document,
 )
 
 load_dotenv()
@@ -519,49 +521,110 @@ def _render_create_ai() -> None:
     )
     num_questions = st.number_input("Number of questions", min_value=1, max_value=50, value=10)
     model = st.selectbox("Claude model", AVAILABLE_MODELS, index=0)
-    submitted = st.button("Generate worksheet", type="primary", disabled=not prompt.strip())
+    submitted = st.button("Generate questions", type="primary", disabled=not prompt.strip())
 
-    if not submitted:
-        return
+    if submitted:
+        client = get_client()
+        with st.status("Generating questions...", expanded=True) as status:
+            def on_step(msg: str, detail: str | None = None) -> None:
+                status.update(label=msg)
+                st.write(msg)
+                if detail:
+                    st.code(detail, language=None)
 
-    out = Path("generated") / uuid4().hex[:8] / "worksheet"
-    client = get_client()
-
-    with st.status("Generating worksheet...", expanded=True) as status:
-        def on_step(msg: str, detail: str | None = None) -> None:
-            status.update(label=msg)
-            st.write(msg)
-            if detail:
-                st.code(detail, language=None)
-
-        try:
-            _, _, record = generate_worksheet(
+            document = generate_worksheet_document(
                 client,
-                TEMPLATE_PATH,
                 prompt,
-                out,
                 num_questions=int(num_questions),
-                max_repairs=3,
-                bucket=BUCKET,
-                db_path=DB_PATH,
                 title=title.strip() or None,
                 header=header.strip() or None,
                 model=model,
                 on_step=on_step,
             )
-        except CompileError as e:
-            logger.error("worksheet compile failed (AI): %s", e.log_tail)
-            status.update(label="Compilation failed", state="error")
-            st.error(f"LaTeX compilation failed after repair attempts:\n\n{e.log_tail}")
-            return
+            status.update(label="Done", state="complete")
 
-        status.update(label="Done", state="complete")
+        # issue #68: hold the generated document for review instead of
+        # compiling immediately -- survives the rerun that follows every
+        # widget interaction, since a plain local variable would not.
+        st.session_state["ai_preview"] = {"document": document, "prompt": prompt, "model": model}
+        st.rerun()
 
-    logger.info(
-        "created worksheet id=%s model=%s num_questions=%s", record.id, model, num_questions
-    )
-    st.success(f"Created worksheet id={record.id}")
-    st.rerun()
+    _render_ai_preview()
+
+
+def _render_ai_preview() -> None:
+    """The accept/reject step from issue #68: shows the questions a prior
+    'Generate questions' click produced (stashed in session_state, since a
+    widget click always triggers a rerun) so the user can review the JSON
+    before any LaTeX is compiled."""
+    preview = st.session_state.get("ai_preview")
+    if not preview:
+        return
+
+    document = preview["document"]
+    st.subheader("Review generated questions")
+    st.caption(f"Title: {document.title}")
+    if document.header:
+        st.caption(f"Header: {document.header}")
+    questions_json = json.dumps([asdict(q) for q in document.questions], indent=2)
+    st.code(questions_json, language="json")
+
+    accept_col, reject_col = st.columns(2)
+    accept = accept_col.button("Accept and compile", type="primary", key="ai_preview_accept")
+    reject = reject_col.button("Reject", key="ai_preview_reject")
+
+    if accept:
+        out = Path("generated") / uuid4().hex[:8] / "worksheet"
+        client = get_client()
+        with st.status("Compiling worksheet...", expanded=True) as status:
+            def on_step(msg: str, detail: str | None = None) -> None:
+                status.update(label=msg)
+                st.write(msg)
+                if detail:
+                    st.code(detail, language=None)
+
+            try:
+                _, _, record = build_worksheet(
+                    document,
+                    TEMPLATE_PATH,
+                    out,
+                    max_repairs=3,
+                    client=client,
+                    bucket=BUCKET,
+                    db_path=DB_PATH,
+                    prompt=preview["prompt"],
+                    model=preview["model"],
+                    on_step=on_step,
+                )
+            except CompileError as e:
+                logger.error("worksheet compile failed (AI): %s", e.log_tail)
+                status.update(label="Compilation failed", state="error")
+                st.error(f"LaTeX compilation failed after repair attempts:\n\n{e.log_tail}")
+                return
+
+            status.update(label="Done", state="complete")
+
+        logger.info(
+            "created worksheet id=%s model=%s num_questions=%s",
+            record.id,
+            preview["model"],
+            len(document.questions),
+        )
+        st.session_state.pop("ai_preview", None)
+        st.success(f"Created worksheet id={record.id}")
+        st.rerun()
+
+    if reject:
+        # Hand off to the manual JSON form below (issue #68) by pre-filling
+        # its widgets via their session_state keys, so the user can tweak
+        # the generated JSON before submitting through the existing manual
+        # (no-AI-repair) compile path.
+        st.session_state["manual_questions_json"] = questions_json
+        st.session_state["manual_title"] = document.title
+        st.session_state["manual_header"] = document.header
+        st.session_state.pop("ai_preview", None)
+        st.info("Copied into the JSON form below for editing.")
+        st.rerun()
 
 
 def _render_create_from_json() -> None:

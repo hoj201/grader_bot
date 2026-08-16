@@ -7,6 +7,7 @@ from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
 from graderbot import name_classifier, scan_grader, storage
+from graderbot.worksheetbot import Question, WorksheetDocument
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
 
@@ -211,6 +212,118 @@ def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
     assert "Questions JSON" in text_area_labels
     button_labels = [b.label for b in at.button]
     assert "Create from JSON" in button_labels
+
+
+def _fake_document():
+    return WorksheetDocument(
+        title="Auto Title",
+        header="Auto Header",
+        questions=[Question(id="1", text="$2+2=$", answer="4")],
+    )
+
+
+def test_create_ai_shows_preview_before_compiling(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    monkeypatch.setattr(
+        "graderbot.worksheetbot.generate_worksheet_document",
+        lambda *args, **kwargs: _fake_document(),
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("build_worksheet should not run before Accept")
+
+    monkeypatch.setattr("graderbot.worksheetbot.build_worksheet", fail_if_called)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
+        "arithmetic worksheet"
+    )
+    at.run()
+    button = next(b for b in at.button if b.label == "Generate questions")
+    button.click().run()
+
+    assert not at.exception
+    button_labels = [b.label for b in at.button]
+    assert "Accept and compile" in button_labels
+    assert "Reject" in button_labels
+    code_values = [c.value for c in at.code]
+    assert any('"id": "1"' in v and '"text": "$2+2=$"' in v for v in code_values)
+
+
+def test_create_ai_accept_compiles_and_stores(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    monkeypatch.setattr(
+        "graderbot.worksheetbot.generate_worksheet_document",
+        lambda *args, **kwargs: _fake_document(),
+    )
+
+    def fake_build(document, template_path, out, max_repairs, client=None, bucket=None,
+                   db_path=None, prompt="", model=None, on_step=None):
+        record = storage.WorksheetRecord(
+            id=1,
+            prompt=prompt,
+            tex_source=r"\documentclass{article}",
+            questions_json="[]",
+            model=model,
+            num_questions=len(document.questions),
+            title=document.title,
+            created_at="2026-07-18T00:00:00+00:00",
+        )
+        return Path("unused.pdf"), document.questions, record
+
+    monkeypatch.setattr("graderbot.worksheetbot.build_worksheet", fake_build)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
+        "arithmetic worksheet"
+    )
+    at.run()
+    next(b for b in at.button if b.label == "Generate questions").click().run()
+
+    # st.success() is immediately followed by st.rerun() (same pattern as the
+    # manual-JSON path), which discards it before AppTest can observe it --
+    # so, like test_create_from_json_logs_created_worksheet, assert via the
+    # log line rather than the UI success element.
+    with caplog.at_level(logging.INFO, logger="graderbot.app"):
+        next(b for b in at.button if b.label == "Accept and compile").click().run()
+
+    assert not at.exception
+    assert any("created worksheet id=1" in r.message for r in caplog.records)
+    # The preview is cleared once accepted.
+    assert "Review generated questions" not in [s.value for s in at.subheader]
+
+
+def test_create_ai_reject_prefills_manual_json_form(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    monkeypatch.setattr(
+        "graderbot.worksheetbot.generate_worksheet_document",
+        lambda *args, **kwargs: _fake_document(),
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
+        "arithmetic worksheet"
+    )
+    at.run()
+    next(b for b in at.button if b.label == "Generate questions").click().run()
+    next(b for b in at.button if b.label == "Reject").click().run()
+
+    assert not at.exception
+    assert '"id": "1"' in at.text_area(key="manual_questions_json").value
+    assert at.text_input(key="manual_title").value == "Auto Title"
+    assert at.text_area(key="manual_header").value == "Auto Header"
 
 
 def test_logging_is_configured_with_default_level(tmp_path, monkeypatch):
