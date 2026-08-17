@@ -5,9 +5,26 @@
 % Required packages
 % ============================================================
 
+% Top/bottom margins are wider than left/right because \WorksheetMarkers
+% (registration markers + QR, see below) draws into the top/bottom margin on
+% EVERY page via a shipout hook. The corner ArUco markers reach
+% \worksheet@markerinset + \worksheet@markersize = 0.90in in from the top and
+% bottom edges; the top-center QR reaches \worksheet@qrinset +
+% \worksheet@qrsize = 0.95in in from the top edge. 1.25in leaves ~0.30-0.35in
+% of buffer beyond both, on every page -- not just page 1 -- so LaTeX's
+% automatic page-breaking never lets question content land in the reserved
+% zone. (Previously this clearance came from a one-time \vspace in
+% \WorksheetHeader, which only ran on page 1 -- so page 2+ questions
+% overlapped the QR/markers on multi-page worksheets.)
+% Left/right margins don't need the same treatment: markers reach the same
+% 0.90in horizontally, but body content is bounded by \textwidth, which
+% already excludes the margins, so it never renders into that zone.
 \RequirePackage[
     letterpaper,
-    margin=0.75in
+    top=1.25in,
+    bottom=1.25in,
+    left=0.75in,
+    right=0.75in
 ]{geometry}
 
 \RequirePackage{graphicx}
@@ -287,9 +304,10 @@
 
 \newcommand{\WorksheetHeader}{%
 
+% Top clearance for the QR/markers comes from the page's top margin (see the
+% geometry setup above), which applies to every page -- no per-call \vspace
+% needed here.
 \worksheet@EnsureMarkersOnEveryPage
-
-\vspace*{0.5in}
 
 \noindent
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ll}
@@ -374,9 +392,10 @@
 % `printedname` box in cv mode), then the copying instructions.
 \newcommand{\WorksheetNameHeader}{%
 
+% Top clearance for the QR/markers comes from the page's top margin (see the
+% geometry setup above), which applies to every page -- no per-call \vspace
+% needed here.
 \worksheet@EnsureMarkersOnEveryPage
-
-\vspace*{0.5in}
 
 \noindent\textbf{Check that the name written at the top is yours.  Then write your name below into every box, just as you would write it
 at the top of a handout.}
