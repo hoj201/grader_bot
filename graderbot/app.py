@@ -53,6 +53,12 @@ TEMPLATE_PATH = Path(
 )
 DB_PATH = Path(os.environ.get("WORKSHEETS_DB_PATH", "worksheets.sqlite3"))
 BUCKET = os.environ.get("S3_BUCKET")
+# Public base URL this app is reachable at -- used to build the permanent
+# `?dl=<public_id>` download links shown in the gallery (see
+# build_permanent_download_url / _resolve_download_redirect below). Set this
+# explicitly in deployment (fly.toml) rather than relying on the default here
+# tracking production, e.g. if a custom domain is ever added.
+BASE_URL = os.environ.get("BASE_URL", "https://grader-bot.fly.dev").rstrip("/")
 
 # Below this, a name read off a page is worth eyeballing. With the default KNN
 # (k=3) a classifier confidence is one of 0/⅓/⅔/1, so this flags anything short
@@ -443,6 +449,34 @@ def render_visualize() -> None:
             )
 
 
+def build_permanent_download_url(base_url: str, public_id: str) -> str:
+    """Copy-pasteable, non-expiring link for a worksheet's student PDF.
+
+    Unlike the presigned S3 URLs shown elsewhere in the gallery (which expire
+    after an hour), this URL never changes. Visiting it re-enters this app,
+    which mints a fresh presigned S3 URL server-side and redirects -- see
+    _resolve_download_redirect and its use in main().
+    """
+    return f"{base_url}/?dl={public_id}"
+
+
+def _resolve_download_redirect(conn, public_id: str) -> tuple[str | None, str | None]:
+    """Resolves a `dl` query-param public_id to a fresh presigned URL for
+    that worksheet's student PDF.
+
+    Returns (presigned_url, error_message) -- exactly one is non-None.
+    Deliberately scoped to the student-facing PDF only; CV/answer-key PDFs
+    aren't exposed through this permanent-link route.
+    """
+    record = storage.get_worksheet_by_public_id(conn, public_id)
+    if record is None:
+        return None, f"No worksheet found for id '{public_id}'."
+    if not record.student_pdf_s3url:
+        return None, "This worksheet has no student PDF available."
+    bucket, key = storage.parse_s3_url(record.student_pdf_s3url)
+    return storage.generate_presigned_url(bucket, key), None
+
+
 def render_gallery() -> None:
     conn = storage.init_db(DB_PATH)
     records = storage.list_worksheets(conn)
@@ -463,10 +497,26 @@ def render_gallery() -> None:
                 f"{record.model} · sty={sty_version} · {record.created_at}"
             )
             cols = st.columns(4)
+            with cols[0]:
+                if record.student_pdf_s3url:
+                    bucket, key = storage.parse_s3_url(record.student_pdf_s3url)
+                    presigned = storage.generate_presigned_url(bucket, key)
+                    st.link_button("Student", presigned, use_container_width=True)
+                    if record.public_id:
+                        st.caption("Permanent link:")
+                        st.code(
+                            build_permanent_download_url(BASE_URL, record.public_id),
+                            language=None,
+                        )
+                else:
+                    st.button("Student", disabled=True, use_container_width=True)
+
+            # CV and answer-key PDFs stay presigned-only (1hr expiry) -- the
+            # permanent-link feature is deliberately scoped to the student PDF.
             for col, label, url in zip(
-                cols,
-                ("Student", "CV", "Answer key"),
-                (record.student_pdf_s3url, record.cv_pdf_s3url, record.answers_pdf_s3url),
+                cols[1:],
+                ("CV", "Answer key"),
+                (record.cv_pdf_s3url, record.answers_pdf_s3url),
             ):
                 with col:
                     if url:
@@ -904,6 +954,25 @@ def main() -> None:
     st.set_page_config(page_title="GraderBot", layout="wide")
     st.title("GraderBot")
 
+    # Permanent download links (see build_permanent_download_url) point back
+    # at this app with `?dl=<public_id>`. Resolve that here, before anything
+    # else renders, and redirect to a freshly-minted presigned S3 URL.
+    dl_id = st.query_params.get("dl")
+    if dl_id:
+        conn = storage.init_db(DB_PATH)
+        presigned, error = _resolve_download_redirect(conn, dl_id)
+        conn.close()
+        if error:
+            st.error(error)
+        else:
+            st.markdown(
+                f'<meta http-equiv="refresh" content="0;url={presigned}">',
+                unsafe_allow_html=True,
+            )
+            st.write("Redirecting to your download...")
+            st.link_button("Click here if the download doesn't start automatically", presigned)
+        st.stop()
+
     if not BUCKET:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
@@ -925,4 +994,5 @@ def main() -> None:
         render_visualize()
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -172,10 +172,17 @@ compilation shell out to native binaries that must be on your `PATH`:
    AWS_SECRET_ACCESS_KEY=<...>
    AWS_REGION=<...>
    WORKSHEETS_DB_PATH=worksheets.sqlite3
+   BASE_URL=https://grader-bot.fly.dev
    ```
    `litestream.yml` reads its DB path from `WORKSHEETS_DB_PATH`, so this must
    be set (and match the path used by `graderbot/app.py` / `graderbot.worksheetbot`) for
    replication to point at the right file.
+
+   `BASE_URL` is optional (defaults to `https://grader-bot.fly.dev`) and is only
+   used to build the permanent `?dl=<public_id>` download links shown in the
+   Gallery tab for each worksheet's student PDF (see `graderbot/app.py`'s
+   `build_permanent_download_url`). Set it explicitly in production (already
+   done in `fly.toml`) so it stays correct if the app's domain ever changes.
    (The `graderbot` package is imported top-level, so run tests and scripts from
    the repo root — `pytest` picks up `pythonpath = ["."]` automatically, and for
    ad-hoc runs use `python -m graderbot.<module>` or set `PYTHONPATH=.`.)

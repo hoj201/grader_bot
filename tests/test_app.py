@@ -6,13 +6,13 @@ import numpy as np
 from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
-from graderbot import name_classifier, scan_grader, storage
+from graderbot import app, name_classifier, scan_grader, storage
 from graderbot.worksheetbot import Question, WorksheetDocument
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
 
 
-def _seed_worksheet(db_path, title=None, questions_json="[]"):
+def _seed_worksheet(db_path, title=None, questions_json="[]", public_id=None):
     conn = storage.init_db(db_path)
     storage.insert_worksheet(
         conn,
@@ -23,6 +23,7 @@ def _seed_worksheet(db_path, title=None, questions_json="[]"):
             model="claude-sonnet-4-6",
             num_questions=10,
             title=title,
+            public_id=public_id,
             student_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/student.pdf",
             cv_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/cv.pdf",
             answers_pdf_s3url="https://bucket.s3.amazonaws.com/worksheet/answers.pdf",
@@ -197,6 +198,33 @@ def test_gallery_tab_exposes_questions_json_expander(tmp_path, monkeypatch):
     assert "View questions JSON" in expander_labels
     code_values = [c.value for c in at.code]
     assert questions_json in code_values
+
+
+def test_gallery_tab_shows_permanent_download_link(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _seed_worksheet(db_path, public_id="ws_a1b2c3d4")
+    _set_env(monkeypatch, db_path)
+    monkeypatch.setenv("BASE_URL", "https://grader-bot.fly.dev")
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    code_values = " ".join(c.value for c in at.code)
+    assert "https://grader-bot.fly.dev/?dl=ws_a1b2c3d4" in code_values
+
+
+def test_gallery_tab_omits_permanent_link_without_public_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _seed_worksheet(db_path)
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    caption_texts = " ".join(c.value for c in at.caption)
+    assert "Permanent link" not in caption_texts
 
 
 def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
@@ -854,3 +882,67 @@ def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
 
     assert not at.exception
     assert any("S3_BUCKET" in err.value for err in at.error)
+
+
+def test_dl_query_param_redirects_to_presigned_student_pdf(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _seed_worksheet(db_path, public_id="ws_a1b2c3d4")
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.query_params["dl"] = "ws_a1b2c3d4"
+    at.run()
+
+    assert not at.exception
+    markdown_texts = " ".join(md.value for md in at.markdown)
+    assert 'http-equiv="refresh"' in markdown_texts
+    assert "worksheet/student.pdf" in markdown_texts
+    # The redirect short-circuits the rest of the app (st.stop()) -- the
+    # gallery/tabs below it never render.
+    assert not at.tabs
+
+
+def test_dl_query_param_shows_error_for_unknown_public_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.query_params["dl"] = "ws_doesnotexist"
+    at.run()
+
+    assert not at.exception
+    assert any("No worksheet found" in e.value for e in at.error)
+
+
+def test_build_permanent_download_url_joins_base_and_public_id():
+    assert (
+        app.build_permanent_download_url("https://grader-bot.fly.dev", "ws_a1b2c3d4")
+        == "https://grader-bot.fly.dev/?dl=ws_a1b2c3d4"
+    )
+
+
+def test_dl_query_param_shows_error_when_no_student_pdf(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    storage.insert_worksheet(
+        conn,
+        storage.WorksheetRecord(
+            prompt="p",
+            tex_source="t",
+            questions_json="[]",
+            model="m",
+            num_questions=1,
+            public_id="ws_nopdf001",
+            created_at="2026-07-18T00:00:00+00:00",
+        ),
+    )
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.query_params["dl"] = "ws_nopdf001"
+    at.run()
+
+    assert not at.exception
+    assert any("no student PDF" in e.value for e in at.error)
