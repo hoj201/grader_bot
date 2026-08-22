@@ -20,6 +20,11 @@ streamlit = "^1.38.0"
 qrcode = "^8.0"
 scikit-learn = "^1.5.0"
 plotly = "^6.9.0"
+# Pinned to 1.23.x: the last onnxruntime line that still ships an Intel-macOS
+# (x86_64) wheel -- 1.25+ dropped it, and this dev machine is an Intel Mac.
+# ONNX Runtime (not torch) is what handwriting_match.py runs inference with;
+# see graderbot/handwriting_match.py's module docstring for why.
+onnxruntime = "~1.23.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
