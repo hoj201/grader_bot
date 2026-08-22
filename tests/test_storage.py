@@ -42,6 +42,7 @@ from graderbot.storage import (
     serialize_boxes,
     slugify_title,
     store_worksheet,
+    transfer_student,
     upload_to_s3,
 )
 from graderbot.worksheet_synth import WORKSHEET_STY_PATH
@@ -948,6 +949,83 @@ def test_list_students_scoped_to_classroom(tmp_path):
 
     names = [(s.first_name, s.last_name) for s in list_students(conn, room_a.id)]
     assert names == [("Anna", "Smith")]
+
+
+def test_transfer_student_moves_classroom_and_keeps_name_samples(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    student = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    image_id = insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student.id,
+            box_id="name1",
+            image_s3url="https://bucket.s3.amazonaws.com/img.png",
+            image_sha256="sha123",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_name_embedding(
+        conn,
+        NameEmbeddingRecord(
+            student_id=student.id,
+            name_image_id=image_id,
+            embedding_s3url="https://bucket.s3.amazonaws.com/vec.npy",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    transferred = transfer_student(conn, student.id, room_b.id)
+
+    assert transferred.id == student.id
+    assert transferred.classroom_id == room_b.id
+    assert list_students(conn, room_a.id) == []
+    assert [s.id for s in list_students(conn, room_b.id)] == [student.id]
+    # The handwriting samples ("signature") survive the transfer untouched.
+    assert [img.id for img in list_name_images(conn, student_id=student.id)] == [image_id]
+
+
+def test_transfer_student_raises_on_unknown_student(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room = get_or_create_classroom(conn, "Room A")
+
+    with pytest.raises(ValueError):
+        transfer_student(conn, 999, room.id)
+
+
+def test_transfer_student_raises_on_unknown_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room = get_or_create_classroom(conn, "Room A")
+    student = get_or_create_student(conn, room.id, "Anna", "Smith")
+
+    with pytest.raises(ValueError):
+        transfer_student(conn, student.id, 999)
+
+
+def test_transfer_student_raises_on_name_collision_in_target_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    student = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    get_or_create_student(conn, room_b.id, "Anna", "Smith")
+
+    with pytest.raises(ValueError):
+        transfer_student(conn, student.id, room_b.id)
+
+    # Nothing changed on failure.
+    assert [s.id for s in list_students(conn, room_a.id)] == [student.id]
+
+
+def test_transfer_student_is_idempotent_when_already_in_target_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room = get_or_create_classroom(conn, "Room A")
+    student = get_or_create_student(conn, room.id, "Anna", "Smith")
+
+    transferred = transfer_student(conn, student.id, room.id)
+
+    assert transferred.classroom_id == room.id
+    assert [s.id for s in list_students(conn, room.id)] == [student.id]
 
 
 def test_import_students_csv_adds_students_with_nickname_column(tmp_path):

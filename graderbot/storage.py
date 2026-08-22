@@ -408,6 +408,68 @@ def list_students(conn: Connection, classroom_id: int) -> List[StudentRecord]:
     ]
 
 
+def transfer_student(conn: Connection, student_id: int, new_classroom_id: int) -> StudentRecord:
+    """Moves a student to a different classroom (issue #72).
+
+    Unlike delete-and-re-add, this preserves the student's `NAME_IMAGES`/
+    `NAME_EMBEDDINGS` handwriting samples -- those tables are keyed by
+    `student_id`, not `classroom_id`, so there is nothing to re-collect.
+    (The per-classroom trained classifier is a separate saved artifact and
+    still needs retraining for both classrooms afterwards, same as any other
+    roster change -- see the README.)
+
+    Raises `ValueError` if the student or the target classroom doesn't
+    exist, or if the target classroom already has a student with the same
+    (first_name, last_name) -- transferring into that name collision is
+    left for the caller to resolve by hand rather than silently merging.
+    Transferring a student to the classroom they're already in is a no-op.
+    """
+    row = conn.execute(
+        "SELECT id, classroom_id, first_name, last_name, nickname FROM STUDENT WHERE id = ?",
+        (student_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"No student with id {student_id}.")
+    student = StudentRecord(
+        id=row[0], classroom_id=row[1], first_name=row[2], last_name=row[3], nickname=row[4]
+    )
+
+    if student.classroom_id == new_classroom_id:
+        return student
+
+    classroom_row = conn.execute(
+        "SELECT id FROM CLASSROOM WHERE id = ?", (new_classroom_id,)
+    ).fetchone()
+    if classroom_row is None:
+        raise ValueError(f"No classroom with id {new_classroom_id}.")
+
+    collision = conn.execute(
+        """
+        SELECT id FROM STUDENT
+        WHERE classroom_id = ? AND first_name = ? AND last_name = ?
+        """,
+        (new_classroom_id, student.first_name, student.last_name),
+    ).fetchone()
+    if collision is not None:
+        raise ValueError(
+            f"{student.first_name} {student.last_name} already exists in the "
+            "target classroom."
+        )
+
+    conn.execute(
+        "UPDATE STUDENT SET classroom_id = ? WHERE id = ?",
+        (new_classroom_id, student_id),
+    )
+    conn.commit()
+    return StudentRecord(
+        id=student.id,
+        classroom_id=new_classroom_id,
+        first_name=student.first_name,
+        last_name=student.last_name,
+        nickname=student.nickname,
+    )
+
+
 def insert_name_image(conn: Connection, record: NameImageRecord) -> int:
     """Records a single handwriting sample in the NAME_IMAGES table
     (issue #2/#43) and returns the new row id."""

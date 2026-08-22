@@ -132,7 +132,7 @@ def render_roster() -> None:
     st.write(
         "Create or select a class, then add students by typing them in, "
         "importing a CSV, or uploading a scan of filled-in name-learning "
-        "worksheets. View or remove students below."
+        "worksheets. View, transfer, or remove students below."
     )
     classroom = _select_classroom("roster_classroom", allow_create=True)
     if classroom is None:
@@ -271,6 +271,7 @@ def render_roster() -> None:
     conn = storage.init_db(DB_PATH)
     try:
         students = storage.list_students(conn, classroom.id)
+        other_classrooms = [c for c in storage.list_classrooms(conn) if c.id != classroom.id]
     finally:
         conn.close()
 
@@ -280,14 +281,65 @@ def render_roster() -> None:
 
     for student in students:
         with st.container(border=True):
-            cols = st.columns([4, 1])
+            cols = st.columns([3, 3, 1])
             label = f"{student.first_name} {student.last_name}".strip()
             if student.nickname:
                 label += f" ({student.nickname})"
             cols[0].markdown(label)
 
-            confirm_key = f"confirm_delete_student_{student.id}"
+            # Transfer (issue #72): moves the STUDENT row to another
+            # classroom while leaving NAME_IMAGES/NAME_EMBEDDINGS (the
+            # handwriting "signature") untouched, unlike delete-and-re-add.
+            transfer_confirm_key = f"confirm_transfer_student_{student.id}"
+            transfer_target_key = f"transfer_target_{student.id}"
             with cols[1]:
+                if not other_classrooms:
+                    st.caption("No other classes to transfer to.")
+                elif st.session_state.get(transfer_confirm_key):
+                    target_label = st.session_state[transfer_target_key]
+                    st.warning(f"Transfer to {target_label}?")
+                    yes, no = st.columns(2)
+                    if yes.button("Confirm", key=f"do_transfer_student_{student.id}",
+                                  type="primary", use_container_width=True):
+                        target = next(c for c in other_classrooms if c.label == target_label)
+                        conn = storage.init_db(DB_PATH)
+                        try:
+                            transfer_error = None
+                            try:
+                                storage.transfer_student(conn, student.id, target.id)
+                            except ValueError as exc:
+                                transfer_error = str(exc)
+                        finally:
+                            conn.close()
+                        if transfer_error:
+                            st.error(transfer_error)
+                        else:
+                            logger.info(
+                                "transferred student id=%s from classroom=%s to classroom=%s",
+                                student.id, classroom.id, target.id,
+                            )
+                            st.session_state.pop(transfer_confirm_key, None)
+                            st.session_state.pop(transfer_target_key, None)
+                            st.rerun()
+                    if no.button("Cancel", key=f"cancel_transfer_student_{student.id}",
+                                 use_container_width=True):
+                        st.session_state.pop(transfer_confirm_key, None)
+                        st.session_state.pop(transfer_target_key, None)
+                        st.rerun()
+                else:
+                    select_col, button_col = st.columns([2, 1])
+                    target_label = select_col.selectbox(
+                        "Transfer to", [c.label for c in other_classrooms],
+                        key=f"transfer_select_{student.id}", label_visibility="collapsed",
+                    )
+                    if button_col.button("Transfer", key=f"ask_transfer_student_{student.id}",
+                                          use_container_width=True):
+                        st.session_state[transfer_confirm_key] = True
+                        st.session_state[transfer_target_key] = target_label
+                        st.rerun()
+
+            confirm_key = f"confirm_delete_student_{student.id}"
+            with cols[2]:
                 if st.session_state.get(confirm_key):
                     st.warning(f"Delete {label}?")
                     yes, no = st.columns(2)

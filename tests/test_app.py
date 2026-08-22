@@ -606,6 +606,51 @@ def test_roster_tab_csv_import_shows_error_for_bad_header(tmp_path, monkeypatch)
     assert any("missing required column" in e.value for e in at.error)
 
 
+def test_roster_tab_transfer_student_moves_classroom(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    room_a = storage.get_or_create_classroom(conn, "Room A")
+    room_b = storage.get_or_create_classroom(conn, "Room B")
+    storage.get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(b for b in at.button if b.label == "Transfer").click().run()
+    next(b for b in at.button if b.label == "Confirm").click().run()
+
+    assert not at.exception
+    conn = storage.init_db(db_path)
+    assert storage.list_students(conn, room_a.id) == []
+    students_b = storage.list_students(conn, room_b.id)
+    conn.close()
+    assert [(s.first_name, s.last_name) for s in students_b] == [("Anna", "Smith")]
+
+
+def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    room_a = storage.get_or_create_classroom(conn, "Room A")
+    room_b = storage.get_or_create_classroom(conn, "Room B")
+    storage.get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    storage.get_or_create_student(conn, room_b.id, "Anna", "Smith")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(b for b in at.button if b.label == "Transfer").click().run()
+    next(b for b in at.button if b.label == "Confirm").click().run()
+
+    assert not at.exception
+    assert any("already exists in the target classroom" in e.value for e in at.error)
+    conn = storage.init_db(db_path)
+    students_a = storage.list_students(conn, room_a.id)
+    conn.close()
+    assert [(s.first_name, s.last_name) for s in students_a] == [("Anna", "Smith")]
+
+
 def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
