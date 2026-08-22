@@ -316,15 +316,14 @@ def test_create_ai_accept_compiles_and_stores(tmp_path, monkeypatch, caplog):
     at.run()
     next(b for b in at.button if b.label == "Generate questions").click().run()
 
-    # st.success() is immediately followed by st.rerun() (same pattern as the
-    # manual-JSON path), which discards it before AppTest can observe it --
-    # so, like test_create_from_json_logs_created_worksheet, assert via the
-    # log line rather than the UI success element.
     with caplog.at_level(logging.INFO, logger="graderbot.app"):
         next(b for b in at.button if b.label == "Accept and compile").click().run()
 
     assert not at.exception
     assert any("created worksheet id=1" in r.message for r in caplog.records)
+    # issue #64: st.success() is followed by st.rerun(), which used to
+    # discard the message before it ever reached the client.
+    assert "Created worksheet id=1" in [s.value for s in at.success]
     # The preview is cleared once accepted.
     assert "Review generated questions" not in [s.value for s in at.subheader]
 
@@ -401,6 +400,9 @@ def test_create_from_json_logs_created_worksheet(tmp_path, monkeypatch, caplog):
 
     assert not at.exception
     assert any("created worksheet id=1" in r.message for r in caplog.records)
+    # issue #64: st.success() is followed by st.rerun(), which used to
+    # discard the message before it ever reached the client.
+    assert "Created worksheet id=1" in [s.value for s in at.success]
 
 
 @mock_aws

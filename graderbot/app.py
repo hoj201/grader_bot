@@ -609,6 +609,16 @@ def render_gallery() -> None:
 
 
 def render_create() -> None:
+    # Both the AI-generation accept flow and the manual-JSON flow end with
+    # st.rerun() (to clear the just-submitted preview/form state), which
+    # discards any st.success called earlier in that same run (issue #64).
+    # Stash it in session_state instead and flush it here, on the run right
+    # after the rerun -- same pattern as roster_flash above.
+    flash = st.session_state.pop("create_flash", None)
+    if flash:
+        for kind, message in flash:
+            getattr(st, kind)(message)
+
     _render_create_ai()
     st.divider()
     _render_create_from_json()
@@ -713,7 +723,7 @@ def _render_ai_preview() -> None:
             len(document.questions),
         )
         st.session_state.pop("ai_preview", None)
-        st.success(f"Created worksheet id={record.id}")
+        st.session_state["create_flash"] = [("success", f"Created worksheet id={record.id}")]
         st.rerun()
 
     if reject:
@@ -796,7 +806,7 @@ def _render_create_from_json() -> None:
         status.update(label="Done", state="complete")
 
     logger.info("created worksheet id=%s (from JSON)", record.id)
-    st.success(f"Created worksheet id={record.id}")
+    st.session_state["create_flash"] = [("success", f"Created worksheet id={record.id}")]
     st.rerun()
 
 
