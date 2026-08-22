@@ -260,13 +260,21 @@ def mark_scan(
         result, graded = _grade_batch(hws, roster, conn, on_step=on_step, name_reader=name_reader)
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")
-            marked_bgr = [
-                cv2.cvtColor(
-                    render_marked_page(scan.image, scan.results, scan.question_boxes),
-                    cv2.COLOR_RGB2BGR,
+            # Build the marked-up pages one scan at a time and drop each
+            # scan's rectified image as soon as its marked-up copy exists,
+            # instead of holding a full rectified image *and* a full
+            # marked-up image for every page in the batch at once. A large
+            # multi-page scan otherwise doubles its peak image memory here,
+            # which is tight on the 1GB fly.io VM this runs on.
+            marked_bgr = []
+            for scan in graded:
+                marked_bgr.append(
+                    cv2.cvtColor(
+                        render_marked_page(scan.image, scan.results, scan.question_boxes),
+                        cv2.COLOR_RGB2BGR,
+                    )
                 )
-                for scan in graded
-            ]
+                scan.image = None
             images_to_pdf(marked_bgr, Path(out_path))
             on_step(f"Wrote marked-up PDF to {out_path}.")
         return result
