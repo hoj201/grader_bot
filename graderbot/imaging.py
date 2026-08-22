@@ -59,7 +59,16 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
 # preliminary check every box-reading caller (grading, name reading) runs
 # before its expensive step (Mathpix/Tesseract/embed+predict), so a blank box
 # skips that work entirely (issue #66, #62).
-_INK_THRESHOLD = 128
+#
+# _INK_THRESHOLD used to be 128 (roughly "as dark as ink"), but real scanned
+# pencil answers rarely get that dark -- graphite scans as mid-gray, not
+# near-black. issue #74: three genuine answers, written in faint pencil, had
+# almost none of their pixels below 128 (as little as 0.01% of the crop) even
+# though a human reads them easily, so they read as blank and skipped Mathpix
+# entirely. 200 still leaves a wide margin above scan-noise/shadow gray levels
+# (measured at 0.0 for genuinely blank boxes in the same scan, even at this
+# looser cutoff) while catching the lighter end of real handwriting.
+_INK_THRESHOLD = 200
 _BLANK_INK_FRACTION = 0.005
 
 

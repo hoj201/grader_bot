@@ -264,8 +264,19 @@
 % Name box
 % ============================================================
 
+% \useasboundingbox pins the tikz picture's footprint to exactly the
+% (0,0)--(nameboxwidth,nameboxheight) rectangle in BOTH modes, so the thicker
+% cv-mode border (\worksheet@namecvlinewidth) never enlarges the box the way
+% the natural bounding box would. Without this, \WorksheetHeader -- which
+% only ever runs once, on page 1 -- lays out page 1 at very slightly
+% different heights between cv and blank renders, drifting every box below
+% it out of sync with its stored (cv-derived) coordinates. Same defect class
+% \questions@AnswerBox was already fixed for; see issue #31, and issue #74
+% where this was a contributing factor.
 \newcommand{\worksheet@NameBox}{%
 \tikz[baseline=-0.6ex]{
+
+    \useasboundingbox (0,0) rectangle (\worksheet@nameboxwidth,\worksheet@nameboxheight);
 
     \ifworksheet@cvmode
 

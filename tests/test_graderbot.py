@@ -462,6 +462,19 @@ def test_is_blank_false_once_ink_exceeds_the_threshold():
     assert not is_blank(image)
 
 
+def test_is_blank_false_for_faint_pencil_ink():
+    # issue #74: a real scanned answer written in faint pencil never actually
+    # goes near-black -- graphite scans as mid-gray, not ink-black. A crop from
+    # the reported scan had answer pixels sitting mostly in the 128-220 gray
+    # range and covering ~3% of the box, yet the old darkness cutoff (128)
+    # counted almost none of them as "ink", so a genuinely answered box read as
+    # blank and skipped Mathpix entirely. Simulate that here with a small gray
+    # (170) rectangle rather than pure black.
+    image = np.full((50, 200, 3), 255, dtype=np.uint8)
+    cv2.rectangle(image, (10, 10), (30, 40), (170, 170, 170), -1)  # ~3% of the box
+    assert not is_blank(image)
+
+
 def test_box_pixel_rect_full_page_box_covers_whole_image():
     assert box_pixel_rect(Box(0.0, 0.0, 1.0, 1.0), 100, 200) == (0, 0, 100, 200)
 
