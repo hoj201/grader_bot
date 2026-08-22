@@ -14,6 +14,5 @@ class QuestionResult:
     answer: str    # the stored correct answer (LaTeX)
     response: str  # what the student wrote, as OCR'd (LaTeX; "" if blank)
     correct: bool
-    note: str = ""  # feedback nudge for wrong answers, e.g. "simplify" (issue #38)
     blank: bool = False  # True if the box was skipped as unanswered (issue #66); markup draws nothing for it
     open_ended: bool = False  # True if the question has no single correct answer (issue #65); never graded right/wrong, and markup draws nothing for it

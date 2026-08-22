@@ -11,7 +11,6 @@ from graderbot.ocr import _BOX_INSET, read_box
 
 _ANSWER_FRAC_PATTERN = re.compile(r"^\\frac\{(-?\d+)\}\{(-?\d+)\}$")
 _DECIMAL_PLACES = 3
-_SIMPLIFY_NOTE = "simplify"
 
 
 def grade_hw(
@@ -47,10 +46,8 @@ def grade_hw(
         if is_open_ended:
             results[qid] = QuestionResult(answer=answer, response=response, correct=False, open_ended=True)
             continue
-        correct, note = grade_response(response, answer)
-        results[qid] = QuestionResult(
-            answer=answer, response=response, correct=correct, note=note
-        )
+        correct = grade_response(response, answer)
+        results[qid] = QuestionResult(answer=answer, response=response, correct=correct)
     return results
 
 
@@ -87,8 +84,8 @@ def _iter_fraction_reinterpretations(text: LiteralString) -> Iterator[Tuple[Frac
         separately from the bar).
 
     `reduced` reports whether the *written* form was already in lowest terms,
-    so callers can accept a reduced garble as correct while flagging an
-    unsimplified one (e.g. `20 1 42` -> 10/21) as a "simplify" nudge."""
+    so callers can accept a reduced garble as correct while still rejecting
+    an unsimplified one (e.g. `20 1 42` -> 10/21)."""
     text = text.strip()
     sign = 1
     if text.startswith("-"):
@@ -124,52 +121,48 @@ def _iter_fraction_reinterpretations(text: LiteralString) -> Iterator[Tuple[Frac
                 yield sign * (whole + Fraction(mnum, den)), gcd(mnum, den) == 1
 
 
-def grade_response(response: LiteralString, answer: LiteralString) -> Tuple[bool, str]:
+def grade_response(response: LiteralString, answer: LiteralString) -> bool:
     """Grades a student `response` against the LaTeX `answer`, returning
-    `(correct, note)`. `note` is normally "" but is set to a short feedback
-    nudge ("simplify") when the response has the right *value* yet is written as
-    a non-reduced fraction, so the marked-up page can tell the student what went
-    wrong instead of only crossing it out (issue #38)."""
+    whether it is correct. A response that has the right *value* but is
+    written as a non-reduced fraction (e.g. `\\frac{20}{42}` for `10/21`) is
+    still graded wrong -- the student must simplify -- it just gets no special
+    treatment beyond that (issue #71 removed the "simplify" feedback nudge
+    from issue #38; a wrong answer is just wrong)."""
     answer_value = _parse_answer(answer)
     if answer_value is None:
-        return False, ""
+        return False
 
     response_value = _parse_answer(response)
 
-    # A fraction written in non-reduced form (e.g. \frac{20}{42} for 10/21) is
-    # marked wrong even when its value is right - the student must simplify. If
-    # the value is right we add a "simplify" note; if it is also wrong, it is
-    # just an ordinary wrong answer.
+    # A fraction written in non-reduced form is wrong even when its value is
+    # right - the student must simplify.
     frac_match = _ANSWER_FRAC_PATTERN.match(response.strip())
     if frac_match:
         numerator, denominator = (int(g) for g in frac_match.groups())
         if denominator != 0 and gcd(numerator, denominator) != 1:
-            note = _SIMPLIFY_NOTE if response_value == answer_value else ""
-            return False, note
+            return False
 
     if response_value is not None:
         if isinstance(response_value, float) or isinstance(answer_value, float):
-            close = round(float(response_value), _DECIMAL_PLACES) == round(float(answer_value), _DECIMAL_PLACES)
-            return close, ""
+            return round(float(response_value), _DECIMAL_PLACES) == round(float(answer_value), _DECIMAL_PLACES)
         if response_value == answer_value:
-            return True, ""
+            return True
 
     # Fall back to tolerating mathpix's fraction garbling, but only when the
-    # correct answer is genuinely a fraction (issue #39). A garble that reaches
-    # the right value only through an unreduced written form (e.g. `20 1 42`)
-    # is still wrong, but earns the same "simplify" nudge (issue #38).
+    # correct answer is genuinely a fraction (issue #39). A garble that only
+    # reaches the right value through an unreduced written form (e.g.
+    # `20 1 42`) is still wrong.
     if isinstance(answer_value, Fraction) and answer_value.denominator != 1:
         reduced_flags = [reduced for value, reduced in _iter_fraction_reinterpretations(response) if value == answer_value]
         if any(reduced_flags):
-            return True, ""
-        if reduced_flags:
-            return False, _SIMPLIFY_NOTE
+            return True
 
-    return False, ""
+    return False
 
 
 def is_correct(response: LiteralString, answer: LiteralString) -> bool:
     """Takes the LaTeX string for an answer and compares it to the submitted
     response by a student. If the answers are equal it is marked as correct.
-    (Thin wrapper over `grade_response` for callers that only need the boolean.)"""
-    return grade_response(response, answer)[0]
+    (Thin wrapper over `grade_response` -- kept for callers that read better
+    naming the boolean check explicitly.)"""
+    return grade_response(response, answer)
