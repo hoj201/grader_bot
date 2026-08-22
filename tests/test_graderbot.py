@@ -326,25 +326,27 @@ def test_is_correct_tolerates_mathpix_fraction_garble(response, answer, expected
 @pytest.mark.parametrize(
     "response,answer,expected",
     [
-        # Right value but not in lowest terms: wrong, with a "simplify" nudge (issue #38).
-        (r"\frac{45}{120}", r"\frac{3}{8}", (False, "simplify")),
-        (r"\frac{20}{42}", r"\frac{10}{21}", (False, "simplify")),
-        (r"\frac{5}{10}", r"\frac{1}{2}", (False, "simplify")),
+        # Right value but not in lowest terms: still wrong (issue #38); issue
+        # #71 dropped the "simplify" feedback note, so it's just wrong now,
+        # like any other wrong answer.
+        (r"\frac{45}{120}", r"\frac{3}{8}", False),
+        (r"\frac{20}{42}", r"\frac{10}{21}", False),
+        (r"\frac{5}{10}", r"\frac{1}{2}", False),
         # Improper fraction equal to a whole number is also "not simplified".
-        (r"\frac{26}{2}", "13", (False, "simplify")),
-        # Already reduced and correct: no note.
-        (r"\frac{3}{8}", r"\frac{3}{8}", (True, "")),
-        (r"\frac{13}{1}", "13", (True, "")),
-        # Wrong value gets no simplify note even if written unreduced.
-        (r"\frac{2}{6}", r"\frac{3}{8}", (False, "")),
-        (r"\frac{1}{3}", r"\frac{3}{8}", (False, "")),
-        # Garbled-OCR fraction that is genuinely right stays correct, no note.
-        ("10 1 21", r"\frac{10}{21}", (True, "")),
-        # Garbled OCR that is right in value but unreduced also earns "simplify".
-        ("20 1 42", r"\frac{10}{21}", (False, "simplify")),
-        ("20/42", r"\frac{10}{21}", (False, "simplify")),
-        # Genuinely wrong garble gets neither correctness nor a note.
-        ("10 1 22", r"\frac{10}{21}", (False, "")),
+        (r"\frac{26}{2}", "13", False),
+        # Already reduced and correct.
+        (r"\frac{3}{8}", r"\frac{3}{8}", True),
+        (r"\frac{13}{1}", "13", True),
+        # Wrong value.
+        (r"\frac{2}{6}", r"\frac{3}{8}", False),
+        (r"\frac{1}{3}", r"\frac{3}{8}", False),
+        # Garbled-OCR fraction that is genuinely right stays correct.
+        ("10 1 21", r"\frac{10}{21}", True),
+        # Garbled OCR that is right in value but unreduced is still wrong.
+        ("20 1 42", r"\frac{10}{21}", False),
+        ("20/42", r"\frac{10}{21}", False),
+        # Genuinely wrong garble stays wrong.
+        ("10 1 22", r"\frac{10}{21}", False),
     ],
 )
 def test_grade_response_flags_unsimplified_fractions(response, answer, expected):
