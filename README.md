@@ -228,13 +228,20 @@ Answer boxes are read by Mathpix by default (`graderbot/ocr.py`), which
 handles handwritten LaTeX fractions well but is tuned for college-level math
 and occasionally misreads a sloppy digit (issue #70: "9" as "G", "14" as
 "1 h"). The Grade tab's "Read answers with" dropdown can switch a run to
-EasyOCR or Google Cloud Vision instead — neither reads fractions, so stick
-with Mathpix for worksheets that have them:
+EasyOCR or Google Cloud Vision instead — by default neither reads fractions,
+so stick with Mathpix for worksheets that have them:
 - **EasyOCR** is restricted to a character allowlist (default `0123456789.`,
   widened per run from the same dropdown, e.g. append `xy` for an algebra
-  worksheet).
+  worksheet). It also has an experimental "Try to detect fractions" checkbox
+  (off by default): `_detect_fraction_bar` looks for a single long
+  horizontal ink stroke spanning most of the box's width with OpenCV, and if
+  found, splits the crop and OCRs the numerator/denominator separately
+  instead of the whole box at once. It's opt-in because a false-positive bar
+  detection on ordinary sloppy handwriting -- the exact problem domain here
+  -- would silently misread a plain answer; only turn it on for a worksheet
+  that actually has fraction questions.
 - **Google Cloud Vision** uses `DOCUMENT_TEXT_DETECTION` (Google's mode for
-  dense/handwritten text) with no allowlist support.
+  dense/handwritten text) with no allowlist support and no fraction-splitting.
 
 `graderbot/answer_reader.py`'s three `AnswerReader`s (`MathpixAnswerReader`,
 `EasyOcrAnswerReader`, `GoogleVisionAnswerReader`) mirror the existing

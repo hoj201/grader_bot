@@ -946,6 +946,57 @@ def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch
     assert seen["answer_reader"].allowlist == "0123456789.xy"
 
 
+def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
+
+    seen = {}
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+        seen["answer_reader"] = answer_reader
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert seen["answer_reader"].detect_fractions is False
+
+
+def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
+
+    seen = {}
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+        seen["answer_reader"] = answer_reader
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
+    at.checkbox(key="grade_easyocr_detect_fractions").check().run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert seen["answer_reader"].detect_fractions is True
+
+
 def test_grade_tab_errors_when_easyocr_service_url_is_not_set(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)

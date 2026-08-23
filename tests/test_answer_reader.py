@@ -7,6 +7,7 @@ Mathpix/Vision API or easyocr_service container is needed.
 
 from unittest.mock import MagicMock, patch
 
+import cv2
 import numpy as np
 import pytest
 import requests
@@ -19,6 +20,7 @@ from graderbot.answer_reader import (
     EasyOcrAnswerReader,
     GoogleVisionAnswerReader,
     MathpixAnswerReader,
+    _detect_fraction_bar,
 )
 from graderbot.models import Box
 from graderbot.ocr import OcrResult
@@ -209,3 +211,130 @@ def test_google_vision_answer_reader_never_puts_the_key_in_the_url(monkeypatch):
             reader.read(image, BOX)
 
     assert "super-secret-key" not in str(exc_info.value)
+
+
+# -- Fraction detection (issue #70's "EasyOCR + OpenCV" combo) --------------
+
+
+def _bar_image(bar_row_fraction=0.5, bar_length_fraction=0.9, width=200, height=100):
+    """A synthetic answer-box crop with a real horizontal ink stroke drawn
+    across it -- stands in for a handwritten fraction bar (or a decoy) so
+    `_detect_fraction_bar`'s actual OpenCV line detection runs for real."""
+    image = np.full((height, width, 3), 255, dtype=np.uint8)
+    y = int(height * bar_row_fraction)
+    x_margin = int(width * (1 - bar_length_fraction) / 2)
+    cv2.line(image, (x_margin, y), (width - x_margin, y), (0, 0, 0), 2)
+    return image
+
+
+def test_detect_fraction_bar_finds_a_long_central_horizontal_line():
+    image = _bar_image(bar_row_fraction=0.5, bar_length_fraction=0.9, height=100)
+
+    bar_y = _detect_fraction_bar(image)
+
+    assert bar_y is not None
+    assert abs(bar_y - 50) <= 5
+
+
+def test_detect_fraction_bar_returns_none_for_a_blank_image():
+    image = np.full((100, 200, 3), 255, dtype=np.uint8)
+
+    assert _detect_fraction_bar(image) is None
+
+
+def test_detect_fraction_bar_ignores_a_short_stroke():
+    # Well under the 50%-of-width minimum -- e.g. a single digit's crossbar,
+    # not a bar spanning the whole answer.
+    image = _bar_image(bar_length_fraction=0.25)
+
+    assert _detect_fraction_bar(image) is None
+
+
+def _mock_ocr_response_sequence(*text_confidence_pairs):
+    responses = []
+    for text, confidence in text_confidence_pairs:
+        responses.append(_mock_ocr_response(text, confidence))
+    return responses
+
+
+def test_easyocr_answer_reader_reads_a_detected_fraction():
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    cropped = _bar_image(bar_row_fraction=0.5, bar_length_fraction=0.9, height=100)
+
+    with patch(
+        "graderbot.answer_reader.requests.post",
+        side_effect=_mock_ocr_response_sequence(("3", 0.9), ("4", 0.8)),
+    ) as mock_post:
+        result = reader._read_as_fraction(cropped)
+
+    assert result == OcrResult(
+        text=r"\frac{3}{4}", raw_text=r"\frac{3}{4}", confidence=0.8, source=EASYOCR_SOURCE
+    )
+    # Each half is read with the narrow digit-only allowlist, regardless of
+    # the reader's own `allowlist`.
+    assert mock_post.call_args_list[0].kwargs["json"]["allowlist"] == "0123456789-"
+    assert mock_post.call_args_list[1].kwargs["json"]["allowlist"] == "0123456789-"
+
+
+def test_easyocr_answer_reader_falls_back_when_no_bar_is_found():
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    cropped = np.full((100, 200, 3), 255, dtype=np.uint8)  # no bar in this crop
+
+    assert reader._read_as_fraction(cropped) is None
+
+
+def test_easyocr_answer_reader_falls_back_when_a_bar_is_too_close_to_an_edge():
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    # A bar right at the top edge is more plausibly a stray mark/box border
+    # than a fraction bar sitting between a numerator and a denominator.
+    cropped = _bar_image(bar_row_fraction=0.02, bar_length_fraction=0.9, height=100)
+
+    assert reader._read_as_fraction(cropped) is None
+
+
+def test_easyocr_answer_reader_falls_back_when_a_half_reads_as_nothing():
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    cropped = _bar_image(bar_row_fraction=0.5, bar_length_fraction=0.9, height=100)
+
+    with patch(
+        "graderbot.answer_reader.requests.post",
+        side_effect=_mock_ocr_response_sequence(("3", 0.9), ("", None)),
+    ):
+        assert reader._read_as_fraction(cropped) is None
+
+
+def test_easyocr_answer_reader_read_uses_fraction_result_when_available(monkeypatch):
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    sentinel = OcrResult(text=r"\frac{1}{2}", raw_text=r"\frac{1}{2}", confidence=0.7, source=EASYOCR_SOURCE)
+    monkeypatch.setattr(reader, "_read_as_fraction", lambda cropped: sentinel)
+    monkeypatch.setattr(
+        reader, "_call_service", lambda *a, **k: pytest.fail("whole-box read should not run")
+    )
+    image = np.full((200, 200, 3), 255, np.uint8)
+
+    assert reader.read(image, BOX) is sentinel
+
+
+def test_easyocr_answer_reader_read_falls_back_to_whole_box_when_fraction_is_none(monkeypatch):
+    reader = EasyOcrAnswerReader(detect_fractions=True, service_url="http://localhost:8080")
+    monkeypatch.setattr(reader, "_read_as_fraction", lambda cropped: None)
+    sentinel = OcrResult(text="7", raw_text="7", confidence=0.9, source=EASYOCR_SOURCE)
+    monkeypatch.setattr(reader, "_call_service", lambda image, allowlist: sentinel)
+    image = np.full((200, 200, 3), 255, np.uint8)
+
+    assert reader.read(image, BOX) is sentinel
+
+
+def test_easyocr_answer_reader_skips_fraction_detection_when_disabled(monkeypatch):
+    """detect_fractions defaults to False -- the whole point of the opt-in
+    (issue #70) is that a run with no fraction questions never risks a
+    false-positive bar detection corrupting a plain-number read."""
+    reader = EasyOcrAnswerReader(service_url="http://localhost:8080")
+    monkeypatch.setattr(
+        reader, "_read_as_fraction", lambda cropped: pytest.fail("must not be called")
+    )
+    sentinel = OcrResult(text="7", raw_text="7", confidence=0.9, source=EASYOCR_SOURCE)
+    monkeypatch.setattr(reader, "_call_service", lambda image, allowlist: sentinel)
+    image = np.full((200, 200, 3), 255, np.uint8)
+
+    assert reader.read(image, BOX) is sentinel

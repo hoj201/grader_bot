@@ -913,6 +913,7 @@ def render_grade() -> None:
         key="grade_answer_source",
     )
     easyocr_extra_chars = ""
+    easyocr_detect_fractions = False
     if answer_source == _EASYOCR_ANSWER_SOURCE:
         easyocr_extra_chars = st.text_input(
             f"Extra characters to allow (appended to '{EASYOCR_DEFAULT_ALLOWLIST}')",
@@ -920,10 +921,20 @@ def render_grade() -> None:
             help="EasyOCR only recognizes characters in this allowlist. Widen it "
             "for a worksheet that needs more (e.g. 'xy' for algebra).",
         )
+        easyocr_detect_fractions = st.checkbox(
+            "Try to detect fractions (experimental)",
+            key="grade_easyocr_detect_fractions",
+            help="Looks for a handwritten fraction bar and OCRs the numerator/"
+            "denominator separately. Off by default: a false-positive bar "
+            "detection on ordinary handwriting would misread a plain answer, "
+            "so only turn this on for a worksheet that actually has fraction "
+            "questions. Mathpix remains the more reliable choice for fractions.",
+        )
         st.caption(
-            "EasyOCR can't read fractions — use Mathpix for worksheets with "
-            "fraction answers. Requires the easyocr_service sidecar "
-            "(`docker compose up -d easyocr`) and EASYOCR_SERVICE_URL set."
+            "EasyOCR can't read fractions unless the box above is checked — "
+            "use Mathpix for worksheets with fraction answers if unsure. "
+            "Requires the easyocr_service sidecar (`docker compose up -d "
+            "easyocr`) and EASYOCR_SERVICE_URL set."
         )
     elif answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
         st.caption(
@@ -957,7 +968,9 @@ def render_grade() -> None:
     if answer_source == _EASYOCR_ANSWER_SOURCE:
         allowlist = EASYOCR_DEFAULT_ALLOWLIST + easyocr_extra_chars
         try:
-            answer_reader = EasyOcrAnswerReader(allowlist=allowlist)
+            answer_reader = EasyOcrAnswerReader(
+                allowlist=allowlist, detect_fractions=easyocr_detect_fractions
+            )
         except EnvironmentError as e:
             st.error(str(e))
             return
