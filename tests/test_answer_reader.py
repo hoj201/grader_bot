@@ -236,15 +236,47 @@ def test_google_vision_answer_reader_never_puts_the_key_in_the_url(monkeypatch):
     image = np.full((200, 200, 3), 255, np.uint8)
     response = MagicMock()
     response.url = "https://vision.googleapis.com/v1/images:annotate"
+    response.text = "Forbidden"
+    response.json.return_value = {"error": {"message": "Forbidden"}}
     response.raise_for_status.side_effect = requests.exceptions.HTTPError(
         "403 Client Error: Forbidden for url: " + response.url, response=response
     )
 
     with patch("graderbot.answer_reader.requests.post", return_value=response):
-        with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        with pytest.raises(RuntimeError) as exc_info:
             reader.read(image, BOX)
 
     assert "super-secret-key" not in str(exc_info.value)
+
+
+def test_google_vision_answer_reader_surfaces_the_error_body_on_a_bad_request(monkeypatch):
+    """The default HTTPError message from raise_for_status() is just "400
+    Client Error: Bad Request for url: ..." -- Google always puts the real
+    reason (bad base64, payload too large, a missing field, ...) in the
+    response body, so a caller shouldn't have to go digging for it."""
+    reader = GoogleVisionAnswerReader(api_key="test-key")
+    image = np.full((200, 200, 3), 255, np.uint8)
+    response = MagicMock()
+    response.url = "https://vision.googleapis.com/v1/images:annotate"
+    response.text = (
+        '{"error": {"code": 400, "message": '
+        '"Request payload size exceeds the limit: 41943040 bytes.", '
+        '"status": "INVALID_ARGUMENT"}}'
+    )
+    response.json.return_value = {
+        "error": {
+            "code": 400,
+            "message": "Request payload size exceeds the limit: 41943040 bytes.",
+            "status": "INVALID_ARGUMENT",
+        }
+    }
+    response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "400 Client Error: Bad Request for url: " + response.url, response=response
+    )
+
+    with patch("graderbot.answer_reader.requests.post", return_value=response):
+        with pytest.raises(RuntimeError, match="payload size exceeds the limit"):
+            reader.read(image, BOX)
 
 
 # -- Fraction detection (issue #70's "EasyOCR + OpenCV" combo) --------------

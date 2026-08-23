@@ -290,7 +290,22 @@ class GoogleVisionAnswerReader:
                 ]
             },
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            # The default HTTPError message is just "400 Client Error: Bad
+            # Request for url: ..." -- useless on its own. Google always puts
+            # the actual reason (bad base64, payload too large, a missing
+            # field, ...) in the response body, so surface that instead of
+            # leaving a caller to go dig for it. Read it from the body, never
+            # from `e`/`response.url` -- same key-leak concern the header-vs-
+            # query-param choice above guards against.
+            detail = response.text
+            try:
+                detail = response.json()["error"]["message"]
+            except (ValueError, KeyError, TypeError):
+                pass
+            raise RuntimeError(f"Google Vision request failed: {detail}") from e
         result = response.json()["responses"][0]
         if "error" in result:
             # The Vision API reports a per-image failure (e.g. bad image
