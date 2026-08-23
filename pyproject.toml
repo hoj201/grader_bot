@@ -24,6 +24,7 @@ onnxruntime = "~1.23.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
+pytest-xdist = "^3.6.0"
 moto = {extras = ["s3"], version = "^5.0.0"}
 modal = "^1.5.4"
 
@@ -36,6 +37,15 @@ pythonpath = ["."]
 # easyocr/torch) are intentionally not in this project's venv (see
 # graderbot/answer_reader.py); its tests run inside its own container.
 testpaths = ["tests"]
+# -n auto (pytest-xdist) spreads the suite across all idle cores instead of
+# running ~100s of CPU almost serially (issue #78). Tests that compile the
+# same LaTeX file into a shared output directory are safe under this because
+# `latexmk_worksheet` (worksheet_synth.py) serializes same-outdir compiles
+# with an advisory file lock.
+addopts = "-n auto"
+markers = [
+    "slow: real latexmk compiles or Streamlit AppTest runs -- deselect with '-m \"not slow\"' for a fast local loop (issue #78)",
+]
 
 
 [build-system]

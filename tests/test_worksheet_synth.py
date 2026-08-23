@@ -1,3 +1,5 @@
+import shutil
+import threading
 from pathlib import Path
 
 import fitz
@@ -20,24 +22,71 @@ DEMO_TEX = Path(__file__).parent.parent / "tex" / "demo.tex"
 FONT_PATH = Path(__file__).parent.parent / "fonts" / "HomemadeApple-Regular.ttf"
 
 
-def test_latexmk_worksheet_returns_pdf_for_cv_mode():
-    pdf_path = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
+# Module-scoped so the two DEMO_TEX renders (cv and blank) are each compiled
+# once and reused by every test below that needs them, instead of every test
+# re-invoking latexmk_worksheet (issue #78) -- mirrors the pattern
+# test_graderbot.py/test_registration.py already use for their own fixtures.
+@pytest.fixture(scope="module")
+def cv_pdf():
+    return latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
 
-    assert Path(pdf_path).is_file()
-    assert Path(pdf_path).suffix == ".pdf"
-    with fitz.open(pdf_path) as doc:
+
+@pytest.fixture(scope="module")
+def blank_pdf():
+    return latexmk_worksheet(str(DEMO_TEX), cv_mode=False)
+
+
+@pytest.mark.slow
+def test_latexmk_worksheet_returns_pdf_for_cv_mode(cv_pdf):
+    assert Path(cv_pdf).is_file()
+    assert Path(cv_pdf).suffix == ".pdf"
+    with fitz.open(cv_pdf) as doc:
         assert doc.page_count > 0
 
 
-def test_latexmk_worksheet_cv_and_blank_outputs_do_not_collide():
-    cv_pdf_path = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
-    blank_pdf_path = latexmk_worksheet(str(DEMO_TEX), cv_mode=False)
-
-    assert cv_pdf_path != blank_pdf_path
-    assert Path(cv_pdf_path).is_file()
-    assert Path(blank_pdf_path).is_file()
+@pytest.mark.slow
+def test_latexmk_worksheet_cv_and_blank_outputs_do_not_collide(cv_pdf, blank_pdf):
+    assert cv_pdf != blank_pdf
+    assert Path(cv_pdf).is_file()
+    assert Path(blank_pdf).is_file()
 
 
+@pytest.mark.slow
+def test_latexmk_worksheet_serializes_concurrent_compiles_into_same_outdir(tmp_path):
+    """Two callers compiling the same tex file into the same outdir (e.g. two
+    pytest-xdist workers running under `-n auto`, issue #78) must not race
+    and hand back a corrupted/half-written PDF -- latexmk_worksheet
+    serializes same-outdir compiles with an advisory file lock."""
+    if shutil.which("latexmk") is None:
+        pytest.skip("latexmk is not installed")
+
+    tex_copy = tmp_path / "demo.tex"
+    tex_copy.write_text(DEMO_TEX.read_text())
+
+    results = []
+    errors = []
+
+    def _compile():
+        try:
+            results.append(latexmk_worksheet(str(tex_copy), cv_mode=True))
+        except Exception as exc:  # collected below rather than failing a thread silently
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_compile) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert len(results) == 4
+    for pdf_path in results:
+        assert Path(pdf_path).is_file()
+        with fitz.open(pdf_path) as doc:
+            assert doc.page_count > 0
+
+
+@pytest.mark.slow
 def test_latexmk_worksheet_finds_repo_root_style_files_from_subdirectory(tmp_path):
     """gbworksheet.sty/questions.sty live at the repo root, not in the TeX
     distribution. app.py writes generated .tex files into a subdirectory
@@ -130,11 +179,11 @@ def _box_region(image: np.ndarray, box) -> np.ndarray:
 
 
 @pytest.fixture(scope="module")
-def boxes():
-    cv_worksheet = latexmk_worksheet(str(DEMO_TEX), cv_mode=True)
-    return extract_answer_boxes(cv_worksheet)
+def boxes(cv_pdf):
+    return extract_answer_boxes(cv_pdf)
 
 
+@pytest.mark.slow
 def test_fill_worksheet_draws_plain_answer_into_its_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
 
@@ -142,6 +191,7 @@ def test_fill_worksheet_draws_plain_answer_into_its_box(boxes):
     assert not np.all(filled_region == 255)
 
 
+@pytest.mark.slow
 def test_fill_worksheet_draws_fraction_into_its_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {"sub001": r"\frac{3}{5}"})
 
@@ -149,6 +199,7 @@ def test_fill_worksheet_draws_fraction_into_its_box(boxes):
     assert not np.all(filled_region == 255)
 
 
+@pytest.mark.slow
 def test_fill_worksheet_draws_student_name_into_name_box(boxes):
     filled = fill_worksheet(str(DEMO_TEX), {}, student_name="Jane Doe")
 
@@ -157,6 +208,7 @@ def test_fill_worksheet_draws_student_name_into_name_box(boxes):
     assert not np.all(filled_region == 255)
 
 
+@pytest.mark.slow
 def test_fill_worksheet_returns_one_image_per_page():
     """demo.tex is a single page, so fill_worksheet returns a one-element list."""
     filled = fill_worksheet(str(DEMO_TEX), {"add001": "12"})
@@ -165,6 +217,7 @@ def test_fill_worksheet_returns_one_image_per_page():
     assert len(filled) == 1
 
 
+@pytest.mark.slow
 def test_fill_worksheet_raises_on_unknown_question_id():
     try:
         fill_worksheet(str(DEMO_TEX), {"does_not_exist": "1"})
@@ -198,12 +251,14 @@ def multipage_tex(tmp_path_factory):
     return tex_path
 
 
+@pytest.mark.slow
 def test_fill_worksheet_spans_multiple_pages(multipage_tex):
     filled = fill_worksheet(str(multipage_tex), {})
 
     assert len(filled) >= 2
 
 
+@pytest.mark.slow
 def test_fill_worksheet_stamps_answers_on_their_own_page(multipage_tex):
     """Every answer must land inside its box on the page that box lives on --
     not at the same relative spot on page 1 (issue #31)."""

@@ -5,6 +5,7 @@ The main impetus for this module is the creation of unit-tests
 for graderbot.py
 """
 
+import fcntl
 import os
 import re
 import subprocess
@@ -49,24 +50,36 @@ def latexmk_worksheet(tex_filename: str, cv_mode: bool) -> str:
     latexmk skip recompilation on repeated calls when the source is
     unchanged, which matters a lot for test speed since this function is
     called on every test run.
+
+    Two calls that resolve to the same `outdir` (e.g. two test-suite
+    processes -- pytest-xdist workers -- compiling the same tex file) are
+    serialized with an advisory file lock: `latexmk` itself has no locking
+    of its own, so two concurrent invocations writing into the same output
+    directory could race and hand back a corrupted or half-written PDF.
     """
     tex_path = Path(tex_filename).resolve()
     cv_flag = "1" if cv_mode else "0"
     outdir = tex_path.parent / ("build_cv" if cv_mode else "build_blank")
     outdir.mkdir(exist_ok=True)
 
-    subprocess.run(
-        [
-            "latexmk",
-            "-pdf",
-            rf"-usepretex=\def\WSCVMode{{{cv_flag}}}",
-            f"-outdir={outdir}",
-            tex_path.name,
-        ],
-        cwd=tex_path.parent,
-        env=_texinputs_env(),
-        check=True,
-    )
+    lock_path = outdir / ".latexmk.lock"
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            subprocess.run(
+                [
+                    "latexmk",
+                    "-pdf",
+                    rf"-usepretex=\def\WSCVMode{{{cv_flag}}}",
+                    f"-outdir={outdir}",
+                    tex_path.name,
+                ],
+                cwd=tex_path.parent,
+                env=_texinputs_env(),
+                check=True,
+            )
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
     return str(outdir / (tex_path.stem + ".pdf"))
 
