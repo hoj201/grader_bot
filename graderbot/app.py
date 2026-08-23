@@ -26,6 +26,7 @@ from graderbot.answer_reader import (
     EASYOCR_DEFAULT_ALLOWLIST,
     EasyOcrAnswerReader,
     GoogleVisionAnswerReader,
+    NoOcrAnswerReader,
 )
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.handwriting_harvest import harvest_handwriting_labels
@@ -80,6 +81,7 @@ _MATHPIX_ANSWER_SOURCE = "Mathpix"
 _EASYOCR_ANSWER_SOURCE = "EasyOCR"
 _GOOGLE_VISION_ANSWER_SOURCE = "Google Cloud Vision"
 _CNN_VERIFIER_ANSWER_SOURCE = "CNN verifier (experimental)"
+_NO_OCR_ANSWER_SOURCE = "No OCR (blank detection only)"
 
 
 def _embedder_dim() -> "int | None":
@@ -914,6 +916,7 @@ def render_grade() -> None:
         _EASYOCR_ANSWER_SOURCE,
         _GOOGLE_VISION_ANSWER_SOURCE,
         _CNN_VERIFIER_ANSWER_SOURCE,
+        _NO_OCR_ANSWER_SOURCE,
     ]
     answer_source = st.selectbox(
         "Read answers with",
@@ -968,6 +971,15 @@ def render_grade() -> None:
                 "issue #81). Falls back to Mathpix for every question until "
                 "then."
             )
+    elif answer_source == _NO_OCR_ANSWER_SOURCE:
+        st.caption(
+            "Never attempts to read a student's handwriting — a filled-in box "
+            "is simply marked wrong (with the correct answer shown, same as "
+            "any other wrong answer) and a blank box is still detected as "
+            "blank. Use this when a class's handwriting is too sloppy for any "
+            "OCR backend to read reliably; students still see which answers "
+            "they got right."
+        )
 
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
 
@@ -1008,6 +1020,8 @@ def render_grade() -> None:
         except EnvironmentError as e:
             st.error(str(e))
             return
+    elif answer_source == _NO_OCR_ANSWER_SOURCE:
+        answer_reader = NoOcrAnswerReader()
     elif answer_source == _CNN_VERIFIER_ANSWER_SOURCE:
         # answer_reader stays Mathpix (the grade_hw default) -- response_scorer
         # only takes over plain-numeric questions (issue #81); fractions still

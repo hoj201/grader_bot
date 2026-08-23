@@ -242,10 +242,18 @@ so stick with Mathpix for worksheets that have them:
   that actually has fraction questions.
 - **Google Cloud Vision** uses `DOCUMENT_TEXT_DETECTION` (Google's mode for
   dense/handwritten text) with no allowlist support and no fraction-splitting.
+- **No OCR** (issue #83) never attempts to transcribe the box at all. It
+  relies entirely on the existing blank-detection check every backend
+  already runs before OCR (`imaging.is_blank`): a blank box is still graded
+  as blank, but a filled-in box is simply marked wrong (with the correct
+  answer written beside it, same as any other wrong answer) without ever
+  guessing what was written. Use it for a class whose handwriting is sloppy
+  enough that Mathpix/EasyOCR/Google Vision all misread it too often to
+  trust — students still get to see which answers they got right.
 
-`graderbot/answer_reader.py`'s three `AnswerReader`s (`MathpixAnswerReader`,
-`EasyOcrAnswerReader`, `GoogleVisionAnswerReader`) mirror the existing
-`NameReader` pattern used for student identification.
+`graderbot/answer_reader.py`'s four `AnswerReader`s (`MathpixAnswerReader`,
+`EasyOcrAnswerReader`, `GoogleVisionAnswerReader`, `NoOcrAnswerReader`) mirror
+the existing `NameReader` pattern used for student identification.
 
 **EasyOCR** runs as a **separate sidecar service** (`easyocr_service/`)
 rather than a `graderbot` dependency: its only real dependency, torch, ships

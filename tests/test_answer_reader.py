@@ -17,9 +17,11 @@ from graderbot.answer_reader import (
     EASYOCR_DEFAULT_ALLOWLIST,
     EASYOCR_SOURCE,
     GOOGLE_VISION_SOURCE,
+    NO_OCR_SOURCE,
     EasyOcrAnswerReader,
     GoogleVisionAnswerReader,
     MathpixAnswerReader,
+    NoOcrAnswerReader,
     _detect_fraction_bar,
 )
 from graderbot.models import Box
@@ -34,6 +36,20 @@ def test_mathpix_answer_reader_delegates_to_read_box(monkeypatch):
 
     image = np.full((200, 200, 3), 255, np.uint8)
     assert MathpixAnswerReader().read(image, BOX) is sentinel
+
+
+def test_no_ocr_answer_reader_never_reads_the_box(monkeypatch):
+    """issue #83: NoOcrAnswerReader must not transcribe the crop at all --
+    it always reports an empty response, regardless of what's in the box,
+    and never makes a network call to do it."""
+    monkeypatch.setattr(
+        answer_reader, "requests", MagicMock(post=lambda *a, **k: pytest.fail("no network call expected"))
+    )
+    image = np.zeros((200, 200, 3), dtype=np.uint8)  # ink everywhere, not blank
+
+    result = NoOcrAnswerReader().read(image, BOX)
+
+    assert result == OcrResult(text="", raw_text="", confidence=None, source=NO_OCR_SOURCE)
 
 
 def test_easyocr_answer_reader_requires_a_service_url(monkeypatch):
