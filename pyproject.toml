@@ -29,6 +29,11 @@ moto = {extras = ["s3"], version = "^5.0.0"}
 # The app modules live in the top-level `graderbot` package; add the repo root
 # to sys.path so `import graderbot` resolves without an install step.
 pythonpath = ["."]
+# Restrict collection to tests/ so `poetry run pytest` never tries to import
+# easyocr_service/test_main.py -- that service's dependencies (fastapi,
+# easyocr/torch) are intentionally not in this project's venv (see
+# graderbot/answer_reader.py); its tests run inside its own container.
+testpaths = ["tests"]
 
 
 [build-system]

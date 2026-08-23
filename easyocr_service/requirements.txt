@@ -1,0 +1,8 @@
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+easyocr==1.7.2
+# Dev/test only (TestClient + pytest for test_main.py), kept in the same
+# file rather than split out since this image isn't part of the production
+# deploy yet -- see the README note on issue #70.
+httpx==0.28.1
+pytest==9.1.1

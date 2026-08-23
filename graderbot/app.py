@@ -22,6 +22,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graderbot import embedding, name_classifier, storage
+from graderbot.answer_reader import EASYOCR_DEFAULT_ALLOWLIST, EasyOcrAnswerReader
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
@@ -67,6 +68,9 @@ _LOW_CONFIDENCE = 0.5
 
 _CLASSIFIER_NAME_SOURCE = "Handwriting classifier"
 _OCR_NAME_SOURCE = "OCR (Tesseract)"
+
+_MATHPIX_ANSWER_SOURCE = "Mathpix"
+_EASYOCR_ANSWER_SOURCE = "EasyOCR"
 
 
 def _embedder_dim() -> "int | None":
@@ -895,6 +899,28 @@ def render_grade() -> None:
             "No handwriting classifier has been trained for this class yet — "
             "train one on the Visualize tab to use it here."
         )
+
+    answer_options = [_MATHPIX_ANSWER_SOURCE, _EASYOCR_ANSWER_SOURCE]
+    answer_source = st.selectbox(
+        "Read answers with",
+        answer_options,
+        index=0,
+        key="grade_answer_source",
+    )
+    easyocr_extra_chars = ""
+    if answer_source == _EASYOCR_ANSWER_SOURCE:
+        easyocr_extra_chars = st.text_input(
+            f"Extra characters to allow (appended to '{EASYOCR_DEFAULT_ALLOWLIST}')",
+            key="grade_easyocr_extra_chars",
+            help="EasyOCR only recognizes characters in this allowlist. Widen it "
+            "for a worksheet that needs more (e.g. 'xy' for algebra).",
+        )
+        st.caption(
+            "EasyOCR can't read fractions — use Mathpix for worksheets with "
+            "fraction answers. Requires the easyocr_service sidecar "
+            "(`docker compose up -d easyocr`) and EASYOCR_SERVICE_URL set."
+        )
+
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
 
     if not submitted or uploaded is None:
@@ -915,6 +941,15 @@ def render_grade() -> None:
                 "No handwriting classifier is saved for this class. Train one on "
                 "the Visualize tab, or switch to OCR above."
             )
+            return
+
+    answer_reader = None
+    if answer_source == _EASYOCR_ANSWER_SOURCE:
+        allowlist = EASYOCR_DEFAULT_ALLOWLIST + easyocr_extra_chars
+        try:
+            answer_reader = EasyOcrAnswerReader(allowlist=allowlist)
+        except EnvironmentError as e:
+            st.error(str(e))
             return
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -938,6 +973,7 @@ def render_grade() -> None:
                 marked_path,
                 on_step=on_step,
                 name_reader=name_reader,
+                answer_reader=answer_reader,
             )
             status.update(label="Grading complete", state="complete")
 

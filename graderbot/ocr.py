@@ -58,22 +58,34 @@ _GREEK_MISREAD_PATTERN = re.compile(
 )
 
 
+# Identifies which AnswerReader produced an OcrResult (issue #70), so a
+# graded result can be traced back to the backend that read it once more
+# than one is in play. See answer_reader.EASYOCR_SOURCE for the other one --
+# defined there rather than here since only this module needs its own.
+MATHPIX_SOURCE = "mathpix"
+
+
 @dataclass(frozen=True)
 class OcrResult:
-    """One Mathpix call's result, kept around for debugging misreads
-    (issue #70) instead of collapsing straight to a string:
+    """One OCR backend's result for one answer box, kept around for
+    debugging misreads (issue #70) instead of collapsing straight to a
+    string:
 
     - `text`: the repaired text grading actually compares against, after
-      `_strip_math_delimiters`/`_fix_stray_slashes`/`_fix_greek_misreads`.
-    - `raw_text`: Mathpix's own `text` field before any of that repair, so a
-      wrong answer can be traced back to what Mathpix literally read.
-    - `confidence`: Mathpix's self-reported confidence for the read (0-1),
-      or `None` if the response didn't include one.
+      Mathpix's `_strip_math_delimiters`/`_fix_stray_slashes`/`_fix_greek_misreads`
+      (EasyOCR has no repair step yet, so its `text` and `raw_text` match).
+    - `raw_text`: the backend's own text before any of that repair, so a
+      wrong answer can be traced back to what it literally read.
+    - `confidence`: the backend's self-reported confidence for the read
+      (0-1), or `None` if it didn't report one.
+    - `source`: which backend produced this (`MATHPIX_SOURCE` or
+      `answer_reader.EASYOCR_SOURCE`), or `""` if unspecified.
     """
 
     text: str
     raw_text: str
     confidence: Optional[float]
+    source: str = ""
 
 
 def _tesseract_ocr_name(image: np.ndarray) -> str:
@@ -161,7 +173,9 @@ def _mathpix_ocr(image: np.ndarray) -> OcrResult:
 
     log_mathpix_call(encoded.tobytes(), raw, text)
 
-    return OcrResult(text=text, raw_text=raw_text, confidence=raw.get("confidence"))
+    return OcrResult(
+        text=text, raw_text=raw_text, confidence=raw.get("confidence"), source=MATHPIX_SOURCE
+    )
 
 
 def read_box(image: np.ndarray, box: Box) -> OcrResult:

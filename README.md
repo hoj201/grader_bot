@@ -223,6 +223,41 @@ Logging failures are non-fatal — they never interrupt OCR or grading. Set in
 MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
+### Answer OCR: Mathpix vs EasyOCR
+Answer boxes are read by Mathpix by default (`graderbot/ocr.py`), which
+handles handwritten LaTeX fractions well but is tuned for college-level math
+and occasionally misreads a sloppy digit (issue #70: "9" as "G", "14" as
+"1 h"). The Grade tab's "Read answers with" dropdown can switch a run to
+EasyOCR instead, restricted to a character allowlist (default `0123456789.`,
+widened per run from the same dropdown, e.g. append `xy` for an algebra
+worksheet) — EasyOCR can't read fractions, so stick with Mathpix for
+worksheets that have them.
+
+`graderbot/answer_reader.py`'s two `AnswerReader`s (`MathpixAnswerReader`,
+`EasyOcrAnswerReader`) mirror the existing `NameReader` pattern used for
+student identification. EasyOCR runs as a **separate sidecar container**
+(`easyocr_service/`) rather than a `graderbot` dependency: its only real
+dependency, torch, ships no wheel for Intel Mac and is heavy to bundle into
+the main deploy image. Run it locally with:
+```shell
+docker compose up -d easyocr
+```
+then set in `.env`:
+```
+EASYOCR_SERVICE_URL=http://localhost:8080
+```
+`EasyOcrAnswerReader` raises a clear error (same failure mode as a missing
+Mathpix key) if this isn't set. The sidecar isn't wired into the fly.io
+deploy yet — the plan is a torch-friendly host (e.g. Modal) for this and any
+future GPU-oriented service, tracked in issue #70. Its own tests
+(`easyocr_service/test_main.py`) run inside the container, not via the main
+`poetry run pytest` (fastapi/easyocr/torch are deliberately not in this
+project's venv):
+```shell
+docker compose build easyocr
+docker compose run --rm easyocr pytest -q
+```
+
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box
 or by recognizing their handwriting. The handwriting path (issue #2) runs

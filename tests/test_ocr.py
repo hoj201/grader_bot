@@ -144,6 +144,23 @@ def test_mathpix_ocr_returns_mathpix_confidence(monkeypatch):
     assert result.confidence == 0.42
 
 
+def test_mathpix_ocr_tags_the_result_with_its_source(monkeypatch):
+    """So a graded result can be traced back to which OCR backend produced
+    it once more than one is available (issue #70)."""
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+    monkeypatch.delenv("MATHPIX_LOG_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    image = np.full((40, 40, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.ocr.requests.post", return_value=_mock_mathpix_response("12")
+    ):
+        result = ocr._mathpix_ocr(image)
+
+    assert result.source == ocr.MATHPIX_SOURCE == "mathpix"
+
+
 def test_mathpix_ocr_confidence_is_none_when_mathpix_omits_it(monkeypatch):
     monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
     monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")

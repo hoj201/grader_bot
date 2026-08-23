@@ -17,9 +17,10 @@ class QuestionResult:
     correct: bool
     blank: bool = False  # True if the box was skipped as unanswered (issue #66); markup draws nothing for it
     open_ended: bool = False  # True if the question has no single correct answer (issue #65); never graded right/wrong, and markup draws nothing for it
-    # Debugging aid for OCR misreads (issue #70): Mathpix's self-reported
-    # confidence for `response` and its raw pre-repair text (see
-    # ocr.OcrResult). Both None when the box was never sent to Mathpix
-    # (blank box, issue #66).
+    # Debugging aid for OCR misreads (issue #70): the OCR backend's
+    # self-reported confidence for `response`, its raw pre-repair text, and
+    # which backend (Mathpix/EasyOCR) produced it (see ocr.OcrResult). All
+    # None/"" when the box was never sent to OCR (blank box, issue #66).
     ocr_confidence: Optional[float] = None
     ocr_raw: Optional[str] = None
+    ocr_source: str = ""

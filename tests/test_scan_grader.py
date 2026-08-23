@@ -81,9 +81,15 @@ def patched_cv(monkeypatch):
 
     monkeypatch.setattr(scan_grader, "OcrNameReader", _StubOcrNameReader)
 
-    def fake_grade_hw(answer_key, boxes, image, open_ended=None):
+    def fake_grade_hw(answer_key, boxes, image, open_ended=None, answer_reader=None):
         grade_hw_calls.append(
-            {"answer_key": answer_key, "boxes": boxes, "image": image, "open_ended": open_ended}
+            {
+                "answer_key": answer_key,
+                "boxes": boxes,
+                "image": image,
+                "open_ended": open_ended,
+                "answer_reader": answer_reader,
+            }
         )
         # A perfect paper: response == answer for every question box.
         return {
@@ -384,3 +390,18 @@ def test_mark_scan_forwards_the_name_reader(
     )
 
     assert set(result.results_by_worksheet["ws_1"]) == {"Zoe Zhang"}
+
+
+def test_grade_scans_forwards_the_answer_reader(db_with_two_worksheets, patched_cv):
+    """Passing a reader switches the answer-box OCR backend -- this is how the
+    Grade tab switches to EasyOCR (issue #70)."""
+    sentinel = object()
+
+    grade_scans(
+        ["alice.png"],
+        roster=["Alice Smith"],
+        db_path=db_with_two_worksheets,
+        answer_reader=sentinel,
+    )
+
+    assert all(call["answer_reader"] is sentinel for call in patched_cv)

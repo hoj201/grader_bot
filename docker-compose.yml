@@ -1,0 +1,10 @@
+services:
+  # EasyOCR sidecar (issue #70) -- see easyocr_service/main.py for why this
+  # is a separate container instead of a graderbot dependency. Run with
+  # `docker compose up -d easyocr`, then set EASYOCR_SERVICE_URL=http://localhost:8080
+  # in .env so the main app (run separately with `streamlit run graderbot/app.py`,
+  # not part of this compose file) can reach it.
+  easyocr:
+    build: ./easyocr_service
+    ports:
+      - "8080:8080"

@@ -5,9 +5,10 @@ from typing import Dict, Iterator, LiteralString, Optional, Tuple, Union
 
 import numpy as np
 
+from graderbot.answer_reader import AnswerReader, MathpixAnswerReader
 from graderbot.imaging import _crop_box, is_blank
 from graderbot.models import Box, QuestionResult
-from graderbot.ocr import _BOX_INSET, read_box
+from graderbot.ocr import _BOX_INSET
 
 _ANSWER_FRAC_PATTERN = re.compile(r"^\\frac\{(-?\d+)\}\{(-?\d+)\}$")
 _DECIMAL_PLACES = 3
@@ -18,14 +19,15 @@ def grade_hw(
     boxes: Dict[LiteralString, Box],
     hw_image: np.ndarray,
     open_ended: Optional[Dict[LiteralString, bool]] = None,
+    answer_reader: Optional[AnswerReader] = None,
 ) -> Dict[LiteralString, QuestionResult]:
     """Grades a single student's work, returning a per-question breakdown
     keyed by question id: for each box, the stored `answer`, the student's
     OCR'd `response`, and whether they match. A box with too little ink to
     have anything written in it is graded as blank without ever calling
-    Mathpix (issue #66) -- `response` is `""`, `correct` is False, and
-    `blank` is True so a marked-up page can skip drawing anything for it.
-    This granularity is what a marked-up feedback PDF needs (issue #24).
+    OCR (issue #66) -- `response` is `""`, `correct` is False, and `blank`
+    is True so a marked-up page can skip drawing anything for it. This
+    granularity is what a marked-up feedback PDF needs (issue #24).
 
     `open_ended` optionally maps a question id to whether it has no single
     correct answer (issue #65). Such a question still gets its response
@@ -34,10 +36,13 @@ def grade_hw(
     `correct=False, open_ended=True` so callers can tell "not graded" apart
     from "graded wrong" and skip it when scoring or marking up a page.
 
-    Each result also carries Mathpix's confidence and raw pre-repair text for
-    the response (issue #70), so a wrong answer can be traced back to what
-    Mathpix actually saw -- see `ocr.OcrResult`."""
+    `answer_reader` picks the OCR backend (issue #70); it defaults to
+    `MathpixAnswerReader`, the pre-issue-#70 behavior. Each result also
+    carries that backend's confidence and raw pre-repair text for the
+    response, so a wrong answer can be traced back to what OCR actually
+    saw -- see `answer_reader.AnswerReader`/`ocr.OcrResult`."""
     open_ended = open_ended or {}
+    answer_reader = answer_reader if answer_reader is not None else MathpixAnswerReader()
     results: Dict[LiteralString, QuestionResult] = {}
     for qid, box in boxes.items():
         answer = answer_key[qid]
@@ -46,7 +51,7 @@ def grade_hw(
         if crop.size > 0 and is_blank(crop):
             results[qid] = QuestionResult(answer=answer, response="", correct=False, blank=True, open_ended=is_open_ended)
             continue
-        ocr_result = read_box(hw_image, box)
+        ocr_result = answer_reader.read(hw_image, box)
         response = ocr_result.text
         if is_open_ended:
             results[qid] = QuestionResult(
@@ -56,6 +61,7 @@ def grade_hw(
                 open_ended=True,
                 ocr_confidence=ocr_result.confidence,
                 ocr_raw=ocr_result.raw_text,
+                ocr_source=ocr_result.source,
             )
             continue
         correct = grade_response(response, answer)
@@ -64,6 +70,7 @@ def grade_hw(
             response=response,
             correct=correct,
             ocr_confidence=ocr_result.confidence,
+            ocr_source=ocr_result.source,
             ocr_raw=ocr_result.raw_text,
         )
     return results

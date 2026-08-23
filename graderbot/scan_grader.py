@@ -25,6 +25,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import cv2
 import numpy as np
 
+from graderbot.answer_reader import AnswerReader
 from graderbot.grading import grade_hw
 from graderbot.imaging import load_scan_pages
 from graderbot.models import Box, QuestionResult
@@ -104,6 +105,7 @@ def _grade_batch(
     conn: Connection,
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
+    answer_reader: Optional[AnswerReader] = None,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
     """Shared core of `grade_scans`/`mark_scan`: rectifies every scan page to the
     canonical frame, groups pages by decoded worksheet id, and grades each group
@@ -115,6 +117,10 @@ def _grade_batch(
     `OcrNameReader(roster)`, the Tesseract path grading has always used. Pass a
     `ClassifierNameReader` to use the trained handwriting classifier instead
     (issue #58).
+
+    `answer_reader` picks the answer-box OCR backend; it defaults to
+    `MathpixAnswerReader` (see `grade_hw`). Pass an `EasyOcrAnswerReader` to
+    use EasyOCR instead (issue #70).
 
     `on_step(msg, detail)` receives per-page progress, separating the two ways a
     page becomes "unreadable" -- rectification (ArUco markers not found) versus
@@ -177,7 +183,7 @@ def _grade_batch(
 
         student_results: Dict[str, StudentResults] = {}
         for (label, image), guess in zip(items, guesses):
-            results = grade_hw(answer_key, question_boxes, image, open_ended_key)
+            results = grade_hw(answer_key, question_boxes, image, open_ended_key, answer_reader)
             student_results[guess.name] = results
             graded = [r for r in results.values() if not r.open_ended]
             n_correct = sum(1 for r in graded if r.correct)
@@ -227,15 +233,19 @@ def grade_scans(
     db_path: Union[str, Path],
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
+    answer_reader: Optional[AnswerReader] = None,
 ) -> ScanBatchResult:
     """Grades each scan in `hws` against the worksheet its QR code identifies,
     fetched from the database at `db_path`. Student names are resolved against
-    `roster` by OCR unless `name_reader` overrides that (see `_grade_batch`).
+    `roster` by OCR unless `name_reader` overrides that; answer boxes are read
+    by Mathpix unless `answer_reader` overrides that (see `_grade_batch`).
     `on_step` streams per-page progress. See `ScanBatchResult` for the return
     shape."""
     conn = init_db(Path(db_path))
     try:
-        result, _ = _grade_batch(hws, roster, conn, on_step=on_step, name_reader=name_reader)
+        result, _ = _grade_batch(
+            hws, roster, conn, on_step=on_step, name_reader=name_reader, answer_reader=answer_reader
+        )
         return result
     finally:
         conn.close()
@@ -248,6 +258,7 @@ def mark_scan(
     out_path: Union[str, Path],
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
+    answer_reader: Optional[AnswerReader] = None,
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
@@ -257,7 +268,9 @@ def mark_scan(
     unknown contribute no page). No PDF is written if nothing graded."""
     conn = init_db(Path(db_path))
     try:
-        result, graded = _grade_batch(hws, roster, conn, on_step=on_step, name_reader=name_reader)
+        result, graded = _grade_batch(
+            hws, roster, conn, on_step=on_step, name_reader=name_reader, answer_reader=answer_reader
+        )
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")
             # Build the marked-up pages one scan at a time and drop each

@@ -362,7 +362,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
         qid = next(qid for qid, b in boxes.items() if b is box)
         return OcrResult(text=responses[qid], raw_text=responses[qid], confidence=0.9)
 
-    monkeypatch.setattr("graderbot.grading.read_box", fake_read_box)
+    monkeypatch.setattr("graderbot.answer_reader.read_box", fake_read_box)
 
     results = grade_hw(answer_key, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
@@ -375,7 +375,7 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
 def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05)}
     monkeypatch.setattr(
-        "graderbot.grading.read_box",
+        "graderbot.answer_reader.read_box",
         lambda image, box: OcrResult(text="", raw_text="", confidence=0.1),
     )
 
@@ -395,7 +395,7 @@ def test_grade_hw_skips_mathpix_for_a_blank_box(monkeypatch):
     def fail_if_called(image, box):
         pytest.fail("read_box (Mathpix) called for a blank box")
 
-    monkeypatch.setattr("graderbot.grading.read_box", fail_if_called)
+    monkeypatch.setattr("graderbot.answer_reader.read_box", fail_if_called)
 
     results = grade_hw({"q1": "12"}, boxes, image)
 
@@ -410,7 +410,7 @@ def test_grade_hw_never_grades_an_open_ended_question(monkeypatch):
     x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
     cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
     monkeypatch.setattr(
-        "graderbot.grading.read_box",
+        "graderbot.answer_reader.read_box",
         lambda image, box: OcrResult(text="I like fractions", raw_text="I like fractions", confidence=0.8),
     )
 
@@ -435,7 +435,7 @@ def test_grade_hw_skips_mathpix_for_a_blank_open_ended_box(monkeypatch):
     def fail_if_called(image, box):
         pytest.fail("read_box (Mathpix) called for a blank box")
 
-    monkeypatch.setattr("graderbot.grading.read_box", fail_if_called)
+    monkeypatch.setattr("graderbot.answer_reader.read_box", fail_if_called)
 
     results = grade_hw({"q1": ""}, boxes, image, open_ended={"q1": True})
 
@@ -451,7 +451,7 @@ def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
     x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
     cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
     monkeypatch.setattr(
-        "graderbot.grading.read_box",
+        "graderbot.answer_reader.read_box",
         lambda image, box: OcrResult(text="12", raw_text="12", confidence=0.95),
     )
 
