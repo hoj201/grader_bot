@@ -1,4 +1,4 @@
-"""A tiny HTTP wrapper around EasyOCR (issue #70), run as its own container.
+"""A tiny HTTP wrapper around EasyOCR (issue #70), run as its own service.
 
 Kept out of the main graderbot deploy image on purpose: EasyOCR's only real
 dependency, torch, ships no wheel for Intel Mac and is heavy (GPU-oriented)
@@ -6,21 +6,33 @@ to bundle alongside a small Streamlit app. graderbot.answer_reader.EasyOcrAnswer
 is an HTTP client for this service, exactly the way graderbot.ocr talks to
 Mathpix -- see EASYOCR_SERVICE_URL in the README.
 
-Run locally with `docker compose up easyocr` (see docker-compose.yml at the
-repo root). Not wired into the fly.io deploy yet -- see the README note on a
-future GPU host (e.g. Modal) for this and other torch-dependent services.
+Two ways to run it, same image contents either way:
+- Locally: `docker compose up easyocr` (see docker-compose.yml at the repo
+  root). No EASYOCR_API_KEY is set in that path, so the auth check below is
+  a no-op -- fine for a service only reachable on localhost.
+- Deployed: `poetry run modal deploy easyocr_service/modal_app.py` (see that
+  file). The resulting *.modal.run URL is public, so it's deployed with an
+  EASYOCR_API_KEY Modal Secret -- _check_api_key below then rejects any
+  /ocr request that doesn't echo it back in an X-Api-Key header.
 """
 
 import base64
+import os
 import re
 from typing import Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI()
+
+# Only enforced when this env var is actually set. Local `docker compose up
+# easyocr` never sets it, so local dev is unaffected; the Modal deployment
+# (see modal_app.py) supplies it from a Modal Secret, so the public
+# *.modal.run URL isn't callable by anyone who happens to find it.
+_API_KEY_ENV = "EASYOCR_API_KEY"
 
 # Built lazily, on first request, not at import time -- so `uvicorn main:app`
 # (and any health check hitting a route other than /ocr) doesn't pay
@@ -71,8 +83,15 @@ def health():
     return {"status": "ok"}
 
 
+def _check_api_key(x_api_key: Optional[str]) -> None:
+    expected = os.environ.get(_API_KEY_ENV)
+    if expected and x_api_key != expected:
+        raise HTTPException(status_code=401, detail="missing or invalid X-Api-Key")
+
+
 @app.post("/ocr", response_model=OcrResponse)
-def ocr(request: OcrRequest) -> OcrResponse:
+def ocr(request: OcrRequest, x_api_key: Optional[str] = Header(default=None)) -> OcrResponse:
+    _check_api_key(x_api_key)
     image = _decode_image(request.image)
     reader = _get_reader()
     detections = reader.readtext(image, allowlist=request.allowlist or None)

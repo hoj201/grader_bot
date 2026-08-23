@@ -11,11 +11,12 @@ Three interchangeable strategies sit behind one `AnswerReader` protocol:
   digits (issue #70: "9" read as "G", "14" read as "1 h"). It cannot read
   fractions -- a worksheet with fraction answers should stay on Mathpix.
 
-  The sidecar is a *separate container* rather than a graderbot dependency:
+  The sidecar is a *separate service* rather than a graderbot dependency:
   EasyOCR's own dependency, torch, ships no wheel for Intel Mac and is heavy
-  to bundle into the main deploy image. It isn't wired into the fly.io
-  deploy yet -- see the README for running it locally via docker-compose,
-  and issue #70 for a future GPU host (e.g. Modal) to actually deploy it.
+  to bundle into the main deploy image. Two ways to run it -- see the README:
+  `docker compose up -d easyocr` locally, or deployed on Modal
+  (`easyocr_service/modal_app.py`) for anywhere the main app itself is
+  hosted (e.g. fly.io) to reach.
 
   Optionally (`detect_fractions=True`) it also attempts a handwritten
   fraction: `_detect_fraction_bar` looks for a single long horizontal ink
@@ -60,6 +61,10 @@ GOOGLE_VISION_SOURCE = "google_vision"
 EASYOCR_DEFAULT_ALLOWLIST = "0123456789."
 
 _EASYOCR_SERVICE_URL_ENV = "EASYOCR_SERVICE_URL"
+# Only required for the Modal deployment (see easyocr_service/modal_app.py);
+# the local docker-compose service never checks this header, so leaving it
+# unset is fine when EASYOCR_SERVICE_URL points at localhost.
+_EASYOCR_API_KEY_ENV = "EASYOCR_API_KEY"
 
 # A fraction's numerator/denominator are always plain (possibly negative)
 # integers -- see grading._ANSWER_FRAC_PATTERN -- so each half is read with
@@ -105,9 +110,13 @@ class EasyOcrAnswerReader:
     to `allowlist`.
 
     Requires `EASYOCR_SERVICE_URL` (e.g. `http://localhost:8080` when running
-    `docker compose up -d easyocr` locally) -- raises `EnvironmentError` if
-    neither `service_url` nor the env var is set, the same failure mode
-    `ocr._mathpix_ocr` uses for missing Mathpix credentials.
+    `docker compose up -d easyocr` locally, or the `*.modal.run` URL printed
+    by `modal deploy easyocr_service/modal_app.py`) -- raises
+    `EnvironmentError` if neither `service_url` nor the env var is set, the
+    same failure mode `ocr._mathpix_ocr` uses for missing Mathpix
+    credentials. `EASYOCR_API_KEY` is optional -- only the Modal deployment
+    checks it (see `easyocr_service/main.py`); the local docker-compose
+    service ignores it entirely.
     """
 
     def __init__(
@@ -115,14 +124,17 @@ class EasyOcrAnswerReader:
         allowlist: str = EASYOCR_DEFAULT_ALLOWLIST,
         service_url: Optional[str] = None,
         detect_fractions: bool = False,
+        api_key: Optional[str] = None,
     ):
         self.allowlist = allowlist
         self.detect_fractions = detect_fractions
         self.service_url = service_url or os.environ.get(_EASYOCR_SERVICE_URL_ENV)
+        self.api_key = api_key or os.environ.get(_EASYOCR_API_KEY_ENV)
         if not self.service_url:
             raise EnvironmentError(
                 f"{_EASYOCR_SERVICE_URL_ENV} must be set (e.g. in a .env file, "
-                "pointing at `docker compose up -d easyocr`) to use EasyOcrAnswerReader"
+                "pointing at `docker compose up -d easyocr` or a Modal deployment) "
+                "to use EasyOcrAnswerReader"
             )
 
     def read(self, image: np.ndarray, box: Box) -> OcrResult:
@@ -169,9 +181,11 @@ class EasyOcrAnswerReader:
             raise ValueError("Could not encode cropped box image")
         data_uri = "data:image/png;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
 
+        headers = {"X-Api-Key": self.api_key} if self.api_key else {}
         response = requests.post(
             f"{self.service_url.rstrip('/')}/ocr",
             json={"image": data_uri, "allowlist": allowlist},
+            headers=headers,
         )
         response.raise_for_status()
         payload = response.json()

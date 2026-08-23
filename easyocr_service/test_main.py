@@ -96,3 +96,63 @@ def test_ocr_returns_empty_text_and_null_confidence_when_nothing_detected(client
 def test_ocr_rejects_a_non_data_uri_image(client):
     response = client.post("/ocr", json={"image": "not-a-data-uri", "allowlist": ""})
     assert response.status_code == 400
+
+
+def test_ocr_allows_requests_with_no_api_key_when_none_is_configured(client, monkeypatch):
+    # Local docker-compose never sets EASYOCR_API_KEY -- the check must be a
+    # no-op there, not a lockout.
+    monkeypatch.delenv("EASYOCR_API_KEY", raising=False)
+    monkeypatch.setattr(main, "_get_reader", lambda: _StubReader([([], "14", 0.9)]))
+
+    image = np.full((40, 100, 3), 255, np.uint8)
+    response = client.post("/ocr", json={"image": _data_uri(image), "allowlist": ""})
+
+    assert response.status_code == 200
+
+
+def test_ocr_rejects_missing_api_key_when_one_is_configured(client, monkeypatch):
+    monkeypatch.setenv("EASYOCR_API_KEY", "secret-value")
+    monkeypatch.setattr(main, "_get_reader", lambda: _StubReader([([], "14", 0.9)]))
+
+    image = np.full((40, 100, 3), 255, np.uint8)
+    response = client.post("/ocr", json={"image": _data_uri(image), "allowlist": ""})
+
+    assert response.status_code == 401
+
+
+def test_ocr_rejects_wrong_api_key_when_one_is_configured(client, monkeypatch):
+    monkeypatch.setenv("EASYOCR_API_KEY", "secret-value")
+    monkeypatch.setattr(main, "_get_reader", lambda: _StubReader([([], "14", 0.9)]))
+
+    image = np.full((40, 100, 3), 255, np.uint8)
+    response = client.post(
+        "/ocr",
+        json={"image": _data_uri(image), "allowlist": ""},
+        headers={"X-Api-Key": "wrong-value"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_ocr_accepts_correct_api_key_when_one_is_configured(client, monkeypatch):
+    monkeypatch.setenv("EASYOCR_API_KEY", "secret-value")
+    monkeypatch.setattr(main, "_get_reader", lambda: _StubReader([([], "14", 0.9)]))
+
+    image = np.full((40, 100, 3), 255, np.uint8)
+    response = client.post(
+        "/ocr",
+        json={"image": _data_uri(image), "allowlist": ""},
+        headers={"X-Api-Key": "secret-value"},
+    )
+
+    assert response.status_code == 200
+
+
+def test_health_ignores_api_key_entirely(client, monkeypatch):
+    # Modal's own health probes shouldn't need the secret -- only /ocr is
+    # gated.
+    monkeypatch.setenv("EASYOCR_API_KEY", "secret-value")
+
+    response = client.get("/health")
+
+    assert response.status_code == 200

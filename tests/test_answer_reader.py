@@ -92,6 +92,40 @@ def test_easyocr_answer_reader_strips_trailing_slash_from_service_url(monkeypatc
     assert url[0] == "http://localhost:8080/ocr"
 
 
+def test_easyocr_answer_reader_sends_no_api_key_header_by_default(monkeypatch):
+    monkeypatch.delenv("EASYOCR_API_KEY", raising=False)
+    reader = EasyOcrAnswerReader(service_url="http://localhost:8080")
+    image = np.full((200, 200, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.answer_reader.requests.post",
+        return_value=_mock_ocr_response("7", 0.5),
+    ) as mock_post:
+        reader.read(image, BOX)
+
+    assert mock_post.call_args.kwargs["headers"] == {}
+
+
+def test_easyocr_answer_reader_sends_api_key_header_when_configured(monkeypatch):
+    reader = EasyOcrAnswerReader(service_url="http://localhost:8080", api_key="secret-value")
+    image = np.full((200, 200, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.answer_reader.requests.post",
+        return_value=_mock_ocr_response("7", 0.5),
+    ) as mock_post:
+        reader.read(image, BOX)
+
+    assert mock_post.call_args.kwargs["headers"] == {"X-Api-Key": "secret-value"}
+
+
+def test_easyocr_answer_reader_uses_api_key_env_var(monkeypatch):
+    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
+    monkeypatch.setenv("EASYOCR_API_KEY", "from-env")
+
+    assert EasyOcrAnswerReader().api_key == "from-env"
+
+
 def test_google_vision_answer_reader_requires_an_api_key(monkeypatch):
     monkeypatch.delenv("GOOGLE_VISION_API_KEY", raising=False)
 

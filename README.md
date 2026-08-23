@@ -247,10 +247,12 @@ so stick with Mathpix for worksheets that have them:
 `EasyOcrAnswerReader`, `GoogleVisionAnswerReader`) mirror the existing
 `NameReader` pattern used for student identification.
 
-**EasyOCR** runs as a **separate sidecar container** (`easyocr_service/`)
+**EasyOCR** runs as a **separate sidecar service** (`easyocr_service/`)
 rather than a `graderbot` dependency: its only real dependency, torch, ships
-no wheel for Intel Mac and is heavy to bundle into the main deploy image. Run
-it locally with:
+no wheel for Intel Mac and is heavy to bundle into the main deploy image.
+Two ways to run it, same image contents either way:
+
+*Locally*, via Docker:
 ```shell
 docker compose up -d easyocr
 ```
@@ -258,17 +260,48 @@ then set in `.env`:
 ```
 EASYOCR_SERVICE_URL=http://localhost:8080
 ```
-`EasyOcrAnswerReader` raises a clear error (same failure mode as a missing
-Mathpix key) if this isn't set. The sidecar isn't wired into the fly.io
-deploy yet — the plan is a torch-friendly host (e.g. Modal) for this and any
-future GPU-oriented service, tracked in issue #70. Its own tests
-(`easyocr_service/test_main.py`) run inside the container, not via the main
-`poetry run pytest` (fastapi/easyocr/torch are deliberately not in this
-project's venv):
+Its own tests (`easyocr_service/test_main.py`) run inside the container, not
+via the main `poetry run pytest` (fastapi/easyocr/torch are deliberately not
+in this project's venv):
 ```shell
 docker compose build easyocr
 docker compose run --rm easyocr pytest -q
 ```
+
+*Deployed*, on [Modal](https://modal.com) — this is how anything other than
+your own laptop (e.g. the fly.io-hosted app) reaches it. One-time setup:
+```shell
+poetry run modal setup                                    # browser auth, once per machine
+
+# Generate the key into a local shell variable so you can reuse the exact
+# same value below -- `modal secret create` only sends it to Modal, it
+# doesn't print it back out or save it anywhere for you.
+EASYOCR_API_KEY=$(openssl rand -hex 32)
+echo "$EASYOCR_API_KEY"                                    # copy this -- you need it again below
+poetry run modal secret create easyocr-api-key EASYOCR_API_KEY=$EASYOCR_API_KEY
+```
+Then deploy (and redeploy after any `easyocr_service/` change):
+```shell
+poetry run modal deploy easyocr_service/modal_app.py
+```
+This prints a URL ending in `-web.modal.run`. Set both of these in `.env`
+(and wherever the Streamlit app itself runs) — `EASYOCR_API_KEY` must be the
+*same* value you just gave `modal secret create`, not a new one:
+```
+EASYOCR_SERVICE_URL=<the printed *.modal.run URL>
+EASYOCR_API_KEY=<the value echoed above>
+```
+Unlike a `localhost` URL, the Modal URL is public, so `main.py` rejects any
+`/ocr` request that doesn't echo `EASYOCR_API_KEY` back as an `X-Api-Key`
+header once that secret is present in its environment — the local
+docker-compose container never gets this secret, so local dev is unaffected
+and needs no key at all. `EasyOcrAnswerReader` raises a clear error (same
+failure mode as a missing Mathpix key) if `EASYOCR_SERVICE_URL` isn't set;
+`EASYOCR_API_KEY` is optional and simply omitted from the request if unset.
+
+Model weights (~70MB) are cached in a Modal `Volume` (`easyocr-models`) so
+only the first request after a cold start pays the download; `_get_reader`
+still defers loading them into memory until the first `/ocr` call either way.
 
 **Google Cloud Vision**, unlike EasyOCR, needs no sidecar and no new Python
 dependency — `GoogleVisionAnswerReader` calls the Vision REST API directly
