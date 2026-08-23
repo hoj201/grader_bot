@@ -8,10 +8,16 @@ import numpy as np
 from graderbot.answer_reader import AnswerReader, MathpixAnswerReader
 from graderbot.imaging import _crop_box, is_blank
 from graderbot.models import Box, QuestionResult
-from graderbot.ocr import _BOX_INSET
+from graderbot.ocr import _BOX_INSET, OcrResult
+from graderbot.response_candidates import generate_candidates, is_plain_numeric
+from graderbot.response_scorer import ResponseScorer
 
 _ANSWER_FRAC_PATTERN = re.compile(r"^\\frac\{(-?\d+)\}\{(-?\d+)\}$")
 _DECIMAL_PLACES = 3
+
+# Where a scored response's `ocr_source`/`QuestionResult.ocr_source` comes
+# from when `response_scorer` supplied the response instead of `answer_reader`.
+_RESPONSE_SCORER_SOURCE = "response_scorer"
 
 
 def grade_hw(
@@ -20,6 +26,7 @@ def grade_hw(
     hw_image: np.ndarray,
     open_ended: Optional[Dict[LiteralString, bool]] = None,
     answer_reader: Optional[AnswerReader] = None,
+    response_scorer: Optional[ResponseScorer] = None,
 ) -> Dict[LiteralString, QuestionResult]:
     """Grades a single student's work, returning a per-question breakdown
     keyed by question id: for each box, the stored `answer`, the student's
@@ -40,7 +47,21 @@ def grade_hw(
     `MathpixAnswerReader`, the pre-issue-#70 behavior. Each result also
     carries that backend's confidence and raw pre-repair text for the
     response, so a wrong answer can be traced back to what OCR actually
-    saw -- see `answer_reader.AnswerReader`/`ocr.OcrResult`."""
+    saw -- see `answer_reader.AnswerReader`/`ocr.OcrResult`.
+
+    `response_scorer` (issue #81) verifies the crop against the known
+    answer plus a handful of OCR-confusable near-misses
+    (`response_candidates.generate_candidates`) instead of transcribing it
+    open-vocabulary, and takes over from `answer_reader` for a non-blank,
+    non-open-ended question whose stored answer is plain numeric
+    (`response_candidates.is_plain_numeric` -- v1 has no fraction support,
+    see that module's docstring). `answer_reader` still handles every other
+    box on the worksheet (fractions, open-ended questions), so passing
+    `response_scorer` alongside the default `MathpixAnswerReader` is the
+    normal way to use it, not an either/or choice. The response it picks is
+    recorded with `ocr_source="response_scorer"` and its normalized
+    candidate-vs-candidate score as `ocr_confidence`, so it shows up in the
+    same debugging views a wrong OCR read does."""
     open_ended = open_ended or {}
     answer_reader = answer_reader if answer_reader is not None else MathpixAnswerReader()
     results: Dict[LiteralString, QuestionResult] = {}
@@ -51,7 +72,16 @@ def grade_hw(
         if crop.size > 0 and is_blank(crop):
             results[qid] = QuestionResult(answer=answer, response="", correct=False, blank=True, open_ended=is_open_ended)
             continue
-        ocr_result = answer_reader.read(hw_image, box)
+        if response_scorer is not None and not is_open_ended and is_plain_numeric(answer):
+            scored = response_scorer.score(hw_image, box, generate_candidates(answer))
+            ocr_result = OcrResult(
+                text=scored.best,
+                raw_text=scored.best,
+                confidence=scored.scores[scored.best],
+                source=_RESPONSE_SCORER_SOURCE,
+            )
+        else:
+            ocr_result = answer_reader.read(hw_image, box)
         response = ocr_result.text
         if is_open_ended:
             results[qid] = QuestionResult(

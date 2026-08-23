@@ -152,7 +152,7 @@ def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
 
     seen_paths = []
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen_paths.extend(str(p) for p in hws)
         return scan_grader.ScanBatchResult()
 
@@ -836,7 +836,7 @@ def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatc
     )
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["name_reader"] = name_reader
         return scan_grader.ScanBatchResult()
 
@@ -901,7 +901,7 @@ def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch)
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -927,7 +927,7 @@ def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -953,7 +953,7 @@ def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -978,7 +978,7 @@ def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkey
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1027,7 +1027,7 @@ def test_grade_tab_passes_a_google_vision_reader_when_selected(tmp_path, monkeyp
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1067,6 +1067,66 @@ def test_grade_tab_errors_when_google_vision_api_key_is_not_set(tmp_path, monkey
     assert not at.exception
     assert not calls
     assert any("GOOGLE_VISION_API_KEY" in e.value for e in at.error)
+
+
+def test_grade_tab_cnn_verifier_falls_back_to_mathpix_when_no_model_exists(tmp_path, monkeypatch):
+    # issue #81: selecting the CNN verifier before any model has been
+    # trained/exported must not error -- it should grade exactly like
+    # Mathpix (no response_scorer passed) rather than fail on first use.
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+    # AppTest re-executes app.py as a fresh module (see _patch_saved_classifier),
+    # so the dependency itself is patched rather than app's imported name.
+    monkeypatch.setattr("graderbot.response_scorer.model_files_exist", lambda: False)
+
+    seen = {}
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+        seen["answer_reader"] = answer_reader
+        seen["response_scorer"] = response_scorer
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.selectbox(key="grade_answer_source").set_value("CNN verifier (experimental)").run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert seen["answer_reader"] is None  # grade_hw defaults this to MathpixAnswerReader
+    assert seen["response_scorer"] is None
+    assert any("No trained model found" in c.value for c in at.caption)
+
+
+def test_grade_tab_cnn_verifier_passes_a_response_scorer_when_model_exists(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+    monkeypatch.setattr("graderbot.response_scorer.model_files_exist", lambda: True)
+    sentinel = object()
+    monkeypatch.setattr("graderbot.response_scorer.CnnResponseScorer", lambda: sentinel)
+
+    seen = {}
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+        seen["response_scorer"] = response_scorer
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    at.selectbox(key="grade_answer_source").set_value("CNN verifier (experimental)").run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert seen["response_scorer"] is sentinel
 
 
 def test_grade_tab_shows_per_page_names_and_flags_low_confidence(tmp_path, monkeypatch):

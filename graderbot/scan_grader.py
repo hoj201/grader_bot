@@ -32,6 +32,7 @@ from graderbot.models import Box, QuestionResult
 from graderbot.name_reader import NameGuess, NameReader, OcrNameReader
 from graderbot.registration import read_worksheet_id, rectify_to_canonical
 from graderbot.markup import render_marked_page
+from graderbot.response_scorer import ResponseScorer
 from graderbot.storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
 
 _NAME_BOX_ID = "name"
@@ -106,6 +107,7 @@ def _grade_batch(
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
+    response_scorer: Optional[ResponseScorer] = None,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
     """Shared core of `grade_scans`/`mark_scan`: rectifies every scan page to the
     canonical frame, groups pages by decoded worksheet id, and grades each group
@@ -121,6 +123,10 @@ def _grade_batch(
     `answer_reader` picks the answer-box OCR backend; it defaults to
     `MathpixAnswerReader` (see `grade_hw`). Pass an `EasyOcrAnswerReader` to
     use EasyOCR instead (issue #70).
+
+    `response_scorer` (issue #81) verifies plain-numeric answers against
+    candidates instead of transcribing them; see `grade_hw` for how it and
+    `answer_reader` split the work.
 
     `on_step(msg, detail)` receives per-page progress, separating the two ways a
     page becomes "unreadable" -- rectification (ArUco markers not found) versus
@@ -183,7 +189,9 @@ def _grade_batch(
 
         student_results: Dict[str, StudentResults] = {}
         for (label, image), guess in zip(items, guesses):
-            results = grade_hw(answer_key, question_boxes, image, open_ended_key, answer_reader)
+            results = grade_hw(
+                answer_key, question_boxes, image, open_ended_key, answer_reader, response_scorer
+            )
             student_results[guess.name] = results
             graded = [r for r in results.values() if not r.open_ended]
             n_correct = sum(1 for r in graded if r.correct)
@@ -234,17 +242,25 @@ def grade_scans(
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
+    response_scorer: Optional[ResponseScorer] = None,
 ) -> ScanBatchResult:
     """Grades each scan in `hws` against the worksheet its QR code identifies,
     fetched from the database at `db_path`. Student names are resolved against
     `roster` by OCR unless `name_reader` overrides that; answer boxes are read
     by Mathpix unless `answer_reader` overrides that (see `_grade_batch`).
-    `on_step` streams per-page progress. See `ScanBatchResult` for the return
-    shape."""
+    `response_scorer` optionally verifies plain-numeric answers instead
+    (issue #81, see `grade_hw`). `on_step` streams per-page progress. See
+    `ScanBatchResult` for the return shape."""
     conn = init_db(Path(db_path))
     try:
         result, _ = _grade_batch(
-            hws, roster, conn, on_step=on_step, name_reader=name_reader, answer_reader=answer_reader
+            hws,
+            roster,
+            conn,
+            on_step=on_step,
+            name_reader=name_reader,
+            answer_reader=answer_reader,
+            response_scorer=response_scorer,
         )
         return result
     finally:
@@ -259,6 +275,7 @@ def mark_scan(
     on_step: OnStep = _print_step,
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
+    response_scorer: Optional[ResponseScorer] = None,
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
@@ -269,7 +286,13 @@ def mark_scan(
     conn = init_db(Path(db_path))
     try:
         result, graded = _grade_batch(
-            hws, roster, conn, on_step=on_step, name_reader=name_reader, answer_reader=answer_reader
+            hws,
+            roster,
+            conn,
+            on_step=on_step,
+            name_reader=name_reader,
+            answer_reader=answer_reader,
+            response_scorer=response_scorer,
         )
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")

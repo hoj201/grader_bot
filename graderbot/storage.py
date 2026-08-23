@@ -102,6 +102,34 @@ class NameEmbeddingRecord:
     id: Optional[int] = None
 
 
+@dataclass
+class HandwritingLabelRecord:
+    """One human-confirmed (crop, text) pair for training/evaluating
+    `response_scorer.CnnResponseScorer` (issue #81) -- the "dedicated
+    labeling pass" from that issue's Data pipeline section, distinct from
+    the bulk *synthetic* training data `answer_glyph_synth` generates.
+
+    `source_mathpix_call_id` optionally links back to the `MATHPIX_CALL` row
+    this crop was seeded from -- labeling can start from what Mathpix
+    already guessed and just have a human confirm/correct it, rather than
+    transcribe every crop from scratch. It's `None` for a crop added some
+    other way.
+
+    `verified` is True once a human has actually looked at `text` and
+    confirmed it's right; a row inserted straight from an unreviewed
+    Mathpix guess starts False and is excluded by
+    `list_handwriting_labels(verified_only=True)` -- an unverified label is
+    exactly the kind of noisy ground truth this whole feature exists to
+    stop relying on."""
+    image_s3url: str
+    image_sha256: str
+    text: str
+    verified: bool = False
+    source_mathpix_call_id: Optional[int] = None
+    created_at: Optional[str] = None
+    id: Optional[int] = None
+
+
 # --------------------------------------------------------------------------
 # SQLite
 # --------------------------------------------------------------------------
@@ -205,6 +233,24 @@ def init_db(db_path: Path) -> Connection:
             student_id INTEGER NOT NULL REFERENCES STUDENT(id),
             name_image_id INTEGER NOT NULL UNIQUE REFERENCES NAME_IMAGES(id),
             embedding_s3url TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    # One row per human-confirmed (crop, text) pair for the response-scorer
+    # model (issue #81) -- see HandwritingLabelRecord. source_mathpix_call_id
+    # is nullable (not every label starts from a Mathpix guess); verified
+    # defaults to 0 (unreviewed) so a bulk import never silently counts as
+    # ground truth.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS HANDWRITING_LABEL (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            image_s3url TEXT,
+            image_sha256 TEXT,
+            text TEXT,
+            verified INTEGER NOT NULL DEFAULT 0,
+            source_mathpix_call_id INTEGER REFERENCES MATHPIX_CALL(id),
             created_at TEXT
         )
         """
@@ -559,6 +605,89 @@ def insert_name_embedding(conn: Connection, record: NameEmbeddingRecord) -> int:
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def insert_handwriting_label(conn: Connection, record: HandwritingLabelRecord) -> int:
+    """Records a single labeled crop in the HANDWRITING_LABEL table
+    (issue #81) and returns the new row id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO HANDWRITING_LABEL
+            (image_s3url, image_sha256, text, verified, source_mathpix_call_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.image_s3url,
+            record.image_sha256,
+            record.text,
+            int(record.verified),
+            record.source_mathpix_call_id,
+            record.created_at,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def handwriting_label_exists(conn: Connection, image_sha256: str) -> bool:
+    """True if a HANDWRITING_LABEL row already stores the crop with this
+    content hash, so a labeling pass can skip re-uploading duplicate crops
+    (same convention as `name_image_exists`)."""
+    row = conn.execute(
+        "SELECT 1 FROM HANDWRITING_LABEL WHERE image_sha256 = ? LIMIT 1",
+        (image_sha256,),
+    ).fetchone()
+    return row is not None
+
+
+_HANDWRITING_LABEL_COLUMNS = (
+    "id", "image_s3url", "image_sha256", "text", "verified", "source_mathpix_call_id", "created_at",
+)
+
+
+def _row_to_handwriting_label(row) -> HandwritingLabelRecord:
+    return HandwritingLabelRecord(
+        id=row[0],
+        image_s3url=row[1],
+        image_sha256=row[2],
+        text=row[3],
+        verified=bool(row[4]),
+        source_mathpix_call_id=row[5],
+        created_at=row[6],
+    )
+
+
+def list_handwriting_labels(conn: Connection, verified_only: bool = False) -> List[HandwritingLabelRecord]:
+    """All labeled crops, or only the human-confirmed ones when
+    `verified_only` is True -- `training/eval.py`'s real-data comparison
+    (issue #81) should always pass `verified_only=True`; an unreviewed
+    label is exactly the kind of noisy ground truth this feature exists to
+    stop relying on."""
+    query = f"SELECT {', '.join(_HANDWRITING_LABEL_COLUMNS)} FROM HANDWRITING_LABEL"
+    if verified_only:
+        query += " WHERE verified = 1"
+    query += " ORDER BY created_at"
+    rows = conn.execute(query).fetchall()
+    return [_row_to_handwriting_label(row) for row in rows]
+
+
+def unlabeled_mathpix_calls(conn: Connection, limit: int = 100) -> List[Tuple[int, str, str, str]]:
+    """MATHPIX_CALL rows with no matching HANDWRITING_LABEL row yet, most
+    recent first: `(id, image_s3url, image_sha256, response_text)` --
+    exactly what `scripts/label_handwriting.py` needs to show a human the
+    image and Mathpix's own guess as a starting point to confirm/correct."""
+    rows = conn.execute(
+        """
+        SELECT mc.id, mc.image_s3url, mc.image_sha256, mc.response_text
+        FROM MATHPIX_CALL mc
+        LEFT JOIN HANDWRITING_LABEL hl ON hl.source_mathpix_call_id = mc.id
+        WHERE hl.id IS NULL
+        ORDER BY mc.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return list(rows)
 
 
 def delete_student(conn: Connection, student_id: int, s3_client=None) -> None:

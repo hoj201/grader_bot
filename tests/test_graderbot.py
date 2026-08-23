@@ -467,6 +467,64 @@ def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
     }
 
 
+class _FakeResponseScorer:
+    """Stands in for `response_scorer.CnnResponseScorer` (issue #81):
+    ignores the crop/candidates and always reports `response`, so these
+    tests exercise `grade_hw`'s wiring without a trained model."""
+
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def score(self, image, box, candidates):
+        self.calls.append(candidates)
+        from graderbot.response_scorer import ScoredResponse
+
+        return ScoredResponse(best=self.response, scores={self.response: 0.7}, log_probs={self.response: -1.0})
+
+
+def test_grade_hw_uses_response_scorer_for_a_plain_numeric_answer(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+    x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
+    cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
+
+    def fail_if_called(image, box):
+        pytest.fail("answer_reader called even though response_scorer handles plain-numeric answers")
+
+    monkeypatch.setattr("graderbot.answer_reader.read_box", fail_if_called)
+    scorer = _FakeResponseScorer("12")
+
+    results = grade_hw({"q1": "12"}, boxes, image, response_scorer=scorer)
+
+    assert results == {
+        "q1": QuestionResult(
+            answer="12", response="12", correct=True, ocr_confidence=0.7, ocr_raw="12", ocr_source="response_scorer"
+        )
+    }
+    assert scorer.calls[0][0] == "12"  # candidates[0] is always the stored answer
+
+
+def test_grade_hw_falls_back_to_answer_reader_for_a_fraction_answer(monkeypatch):
+    # response_scorer's v1 scope is plain numeric only (response_candidates
+    # module docstring) -- a fraction answer must still go to answer_reader
+    # even when a response_scorer is supplied.
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+    x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
+    cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
+    monkeypatch.setattr(
+        "graderbot.answer_reader.read_box",
+        lambda image, box: OcrResult(text="\\frac{3}{4}", raw_text="\\frac{3}{4}", confidence=0.9),
+    )
+    scorer = _FakeResponseScorer("should not be used")
+
+    results = grade_hw({"q1": r"\frac{3}{4}"}, boxes, image, response_scorer=scorer)
+
+    assert scorer.calls == []
+    assert results["q1"].response == "\\frac{3}{4}"
+
+
 def test_ink_fraction_is_zero_for_a_blank_image():
     blank = np.full((20, 20, 3), 255, dtype=np.uint8)
     assert ink_fraction(blank) == 0.0

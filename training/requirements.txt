@@ -1,0 +1,23 @@
+# Isolated from the main project's pyproject.toml the same way
+# easyocr_service/requirements.txt is: torch has no Intel-macOS wheel for
+# this project's Python version (confirmed directly -- `pip install torch`
+# fails outright on this dev machine), so it must never become a
+# graderbot dependency. Install with:
+#
+#     cd training && pip install -r requirements.txt
+#
+# (or let modal_app.py's image build install it -- see that file).
+torch>=2.0
+onnx>=1.15
+onnxruntime~=1.23.2
+
+# dataset.py imports graderbot.answer_glyph_synth / response_candidates /
+# response_scorer, which transitively pull in these -- see dataset.py's
+# module docstring for why that's fine to pay for in this isolated venv.
+numpy>=2.0
+opencv-python-headless>=5.0
+pillow>=12.0
+pymupdf>=1.28
+pytesseract>=0.3
+requests>=2.34
+python-dotenv>=1.2

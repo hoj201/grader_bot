@@ -10,6 +10,7 @@ from moto import mock_aws
 
 from graderbot.models import Box
 from graderbot.storage import (
+    HandwritingLabelRecord,
     NameEmbeddingRecord,
     NameImageRecord,
     WorksheetRecord,
@@ -24,14 +25,18 @@ from graderbot.storage import (
     get_or_create_classroom,
     get_or_create_student,
     get_worksheet_by_public_id,
+    handwriting_label_exists,
     image_to_pdf,
     images_to_pdf,
     import_students_csv,
     init_db,
+    insert_handwriting_label,
+    insert_mathpix_call,
     insert_name_embedding,
     insert_name_image,
     insert_worksheet,
     list_classrooms,
+    list_handwriting_labels,
     list_name_images,
     list_students,
     list_unembedded_name_images,
@@ -43,6 +48,7 @@ from graderbot.storage import (
     slugify_title,
     store_worksheet,
     transfer_student,
+    unlabeled_mathpix_calls,
     upload_to_s3,
 )
 from graderbot.worksheet_synth import WORKSHEET_STY_PATH
@@ -1165,6 +1171,82 @@ def test_list_unembedded_name_images_excludes_embedded(tmp_path):
     )
 
     assert list_unembedded_name_images(conn) == []
+
+
+def test_insert_handwriting_label_and_exists(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    assert not handwriting_label_exists(conn, "sha456")
+
+    record = HandwritingLabelRecord(
+        image_s3url="https://bucket.s3.amazonaws.com/handwriting_labels/sha456.png",
+        image_sha256="sha456",
+        text="12",
+        verified=True,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    insert_handwriting_label(conn, record)
+
+    assert handwriting_label_exists(conn, "sha456")
+
+
+def test_list_handwriting_labels_verified_only_excludes_unverified(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    insert_handwriting_label(
+        conn,
+        HandwritingLabelRecord(
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_verified",
+            text="12",
+            verified=True,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_handwriting_label(
+        conn,
+        HandwritingLabelRecord(
+            image_s3url="https://bucket.s3.amazonaws.com/b.png",
+            image_sha256="sha_unverified",
+            text="7",
+            verified=False,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert len(list_handwriting_labels(conn)) == 2
+    verified = list_handwriting_labels(conn, verified_only=True)
+    assert len(verified) == 1
+    assert verified[0].image_sha256 == "sha_verified"
+
+
+def test_unlabeled_mathpix_calls_excludes_already_labeled(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    now = datetime.now(timezone.utc).isoformat()
+    call_id = insert_mathpix_call(
+        conn,
+        image_s3url="https://bucket.s3.amazonaws.com/call.png",
+        image_sha256="sha_call",
+        response_json="{}",
+        response_text="12",
+        created_at=now,
+    )
+
+    pending = unlabeled_mathpix_calls(conn)
+    assert [row[0] for row in pending] == [call_id]
+
+    insert_handwriting_label(
+        conn,
+        HandwritingLabelRecord(
+            image_s3url="https://bucket.s3.amazonaws.com/call.png",
+            image_sha256="sha_call",
+            text="12",
+            verified=True,
+            source_mathpix_call_id=call_id,
+            created_at=now,
+        ),
+    )
+
+    assert unlabeled_mathpix_calls(conn) == []
 
 
 @mock_aws

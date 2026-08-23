@@ -81,7 +81,7 @@ def patched_cv(monkeypatch):
 
     monkeypatch.setattr(scan_grader, "OcrNameReader", _StubOcrNameReader)
 
-    def fake_grade_hw(answer_key, boxes, image, open_ended=None, answer_reader=None):
+    def fake_grade_hw(answer_key, boxes, image, open_ended=None, answer_reader=None, response_scorer=None):
         grade_hw_calls.append(
             {
                 "answer_key": answer_key,
@@ -89,6 +89,7 @@ def patched_cv(monkeypatch):
                 "image": image,
                 "open_ended": open_ended,
                 "answer_reader": answer_reader,
+                "response_scorer": response_scorer,
             }
         )
         # A perfect paper: response == answer for every question box.
@@ -111,6 +112,22 @@ def test_grade_scans_groups_by_worksheet_id(db_with_two_worksheets, patched_cv):
     assert set(result.results_by_worksheet) == {"ws_1", "ws_2"}
     assert set(result.results_by_worksheet["ws_1"]) == {"Alice Smith", "Bob Jones"}
     assert set(result.results_by_worksheet["ws_2"]) == {"Carol White"}
+
+
+def test_grade_scans_passes_response_scorer_through_to_grade_hw(
+    db_with_two_worksheets, patched_cv
+):
+    # issue #81: response_scorer must reach grade_hw the same way answer_reader does.
+    sentinel = object()
+
+    grade_scans(
+        ["alice.png"],
+        roster=["Alice Smith"],
+        db_path=db_with_two_worksheets,
+        response_scorer=sentinel,
+    )
+
+    assert patched_cv[0]["response_scorer"] is sentinel
 
 
 def test_grade_scans_uses_stored_answer_key_and_excludes_name_box(

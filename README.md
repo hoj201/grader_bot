@@ -313,6 +313,46 @@ GOOGLE_VISION_API_KEY=<your-api-key>
 https://cloud.google.com/vision/docs/setup). Works on fly.io as-is, since
 it's a plain HTTPS call.
 
+### Answer verification: CNN verifier (experimental, issue #81)
+All three backends above transcribe a crop open-vocabulary, with no idea
+what a middle-school worksheet's answer is even supposed to look like. The
+"CNN verifier (experimental)" option in the Grade tab's "Read answers with"
+dropdown instead **verifies** a crop against the known answer plus a
+handful of OCR-confusable near-misses (`graderbot/response_candidates.py`),
+using a small CRNN trained from scratch on this project's own domain
+(digits, `.`, `-`) rather than a general-purpose alphabet — directly
+targeting the kind of confusion (e.g. "1" vs "/") a borrowed English-prose
+model couldn't resolve (see the paused `handwriting-ctc-match` spike, issue
+#73).
+
+- **Scope (v1): plain numeric answers only** — integers, decimals,
+  negatives. A `\frac{a}{b}` question on the same worksheet still falls
+  back to Mathpix automatically; there's no need to switch dropdowns
+  mid-worksheet.
+- **Runs in-process**, unlike EasyOCR — its only dependency,
+  `onnxruntime`, ships real wheels for both Intel macOS and fly.io (unlike
+  torch), so `CnnResponseScorer` (`graderbot/response_scorer.py`) just
+  loads `models/response_scorer/weights.onnx` off disk, no sidecar, no
+  Modal deployment for inference.
+- **Training is the part that needs Modal** — the CRNN itself is trained
+  with torch (`training/`, isolated from the main project's
+  `pyproject.toml` the same way `easyocr_service/` isolates EasyOCR's torch
+  dependency), and this dev environment has no torch wheel available at
+  all. Generate synthetic training crops with
+  `graderbot/answer_glyph_synth.py`, train + export with:
+  ```shell
+  poetry run modal run training/modal_app.py --steps 20000
+  ```
+  which writes `models/response_scorer/{weights.onnx,vocab.json}` straight
+  into the repo. `training/eval.py` reports per-answer-type accuracy on
+  held-out synthetic data.
+- **Real-data labeling**: `scripts/label_handwriting.py` walks unreviewed
+  `MATHPIX_CALL` crops one at a time (seeded from Mathpix's own guess) and
+  records a confirmed/corrected `HANDWRITING_LABEL` row — the ground truth
+  a synthetic-only model needs checked against before being trusted (the
+  gap that sank the `pylaia-iam` spike). Until a real-data eval exists, the
+  Grade tab option stays labeled "(experimental)".
+
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box
 or by recognizing their handwriting. The handwriting path (issue #2) runs

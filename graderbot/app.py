@@ -31,6 +31,7 @@ from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
 from graderbot.name_worksheets import generate_name_worksheets
+from graderbot.response_scorer import CnnResponseScorer, model_files_exist
 from graderbot.scan_grader import mark_scan, results_by_student
 from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
@@ -76,6 +77,7 @@ _OCR_NAME_SOURCE = "OCR (Tesseract)"
 _MATHPIX_ANSWER_SOURCE = "Mathpix"
 _EASYOCR_ANSWER_SOURCE = "EasyOCR"
 _GOOGLE_VISION_ANSWER_SOURCE = "Google Cloud Vision"
+_CNN_VERIFIER_ANSWER_SOURCE = "CNN verifier (experimental)"
 
 
 def _embedder_dim() -> "int | None":
@@ -905,7 +907,12 @@ def render_grade() -> None:
             "train one on the Visualize tab to use it here."
         )
 
-    answer_options = [_MATHPIX_ANSWER_SOURCE, _EASYOCR_ANSWER_SOURCE, _GOOGLE_VISION_ANSWER_SOURCE]
+    answer_options = [
+        _MATHPIX_ANSWER_SOURCE,
+        _EASYOCR_ANSWER_SOURCE,
+        _GOOGLE_VISION_ANSWER_SOURCE,
+        _CNN_VERIFIER_ANSWER_SOURCE,
+    ]
     answer_source = st.selectbox(
         "Read answers with",
         answer_options,
@@ -941,6 +948,24 @@ def render_grade() -> None:
             "Google Cloud Vision can't read fractions either — use Mathpix for "
             "worksheets with fraction answers. Requires GOOGLE_VISION_API_KEY."
         )
+    elif answer_source == _CNN_VERIFIER_ANSWER_SOURCE:
+        if model_files_exist():
+            st.caption(
+                "Verifies plain numeric answers (no fractions yet) against the "
+                "correct answer and a few OCR-confusable near-misses, using a "
+                "small CRNN trained from scratch on this worksheet domain "
+                "(issue #81) — instead of transcribing the crop blind the way "
+                "the other three backends do. Falls back to Mathpix for "
+                "fraction questions on the same worksheet. Experimental: not "
+                "yet validated on real (non-synthetic) handwriting."
+            )
+        else:
+            st.caption(
+                "No trained model found at models/response_scorer/ yet — run "
+                "training/train.py and training/export_onnx.py first (see "
+                "issue #81). Falls back to Mathpix for every question until "
+                "then."
+            )
 
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
 
@@ -965,6 +990,7 @@ def render_grade() -> None:
             return
 
     answer_reader = None
+    response_scorer = None
     if answer_source == _EASYOCR_ANSWER_SOURCE:
         allowlist = EASYOCR_DEFAULT_ALLOWLIST + easyocr_extra_chars
         try:
@@ -980,6 +1006,14 @@ def render_grade() -> None:
         except EnvironmentError as e:
             st.error(str(e))
             return
+    elif answer_source == _CNN_VERIFIER_ANSWER_SOURCE:
+        # answer_reader stays Mathpix (the grade_hw default) -- response_scorer
+        # only takes over plain-numeric questions (issue #81); fractions still
+        # need answer_reader. No model yet means response_scorer stays unset
+        # too, so grading is plain Mathpix throughout rather than failing on
+        # the first question (the caption above already told the user this).
+        if model_files_exist():
+            response_scorer = CnnResponseScorer()
 
     with tempfile.TemporaryDirectory() as tmp:
         scan_suffix = Path(uploaded.name).suffix or ".pdf"
@@ -1003,6 +1037,7 @@ def render_grade() -> None:
                 on_step=on_step,
                 name_reader=name_reader,
                 answer_reader=answer_reader,
+                response_scorer=response_scorer,
             )
             status.update(label="Grading complete", state="complete")
 
