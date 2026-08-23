@@ -346,12 +346,27 @@ model couldn't resolve (see the paused `handwriting-ctc-match` spike, issue
   which writes `models/response_scorer/{weights.onnx,vocab.json}` straight
   into the repo. `training/eval.py` reports per-answer-type accuracy on
   held-out synthetic data.
-- **Real-data labeling**: `scripts/label_handwriting.py` walks unreviewed
-  `MATHPIX_CALL` crops one at a time (seeded from Mathpix's own guess) and
-  records a confirmed/corrected `HANDWRITING_LABEL` row — the ground truth
-  a synthetic-only model needs checked against before being trusted (the
-  gap that sank the `pylaia-iam` spike). Until a real-data eval exists, the
-  Grade tab option stays labeled "(experimental)".
+- **Real-data labeling, two ways**, both writing to the same
+  `HANDWRITING_LABEL` table:
+  - **Copy worksheets** (Handwriting Data tab, `graderbot/handwriting_sample_worksheets.py`
+    + `graderbot/handwriting_harvest.py`) — the preferred path. Generates an
+    ordinary worksheet where each box already prints its own answer, so the
+    student only copies it by hand; the printed text *is* the ground truth,
+    so every scanned-back box becomes a trustworthy label with **no manual
+    review**. This is real student handwriting captured through the normal
+    scan/registration pipeline, not synthetic-font renders or a borrowed
+    dataset like MNIST (isolated digits, no `.`/`-`, no multi-character
+    sequences, no box-crop realism).
+  - `scripts/label_handwriting.py` walks unreviewed `MATHPIX_CALL` crops one
+    at a time (seeded from Mathpix's own guess) and records a
+    confirmed/corrected label — useful for labeling *existing* scans of
+    real graded worksheets, where a human's review is still the source of
+    truth.
+
+  Either way, real labels are the ground truth a synthetic-only model needs
+  checked against before being trusted (the gap that sank the `pylaia-iam`
+  spike). Until a real-data eval exists, the Grade tab option stays labeled
+  "(experimental)".
 
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box

@@ -22,19 +22,16 @@ import torch
 from torch.utils.data import IterableDataset
 
 from graderbot.answer_glyph_synth import generate_training_sample
-from graderbot.response_candidates import generate_candidates
+from graderbot.response_candidates import SAMPLE_ANSWER_POOL, generate_candidates
 from graderbot.response_scorer import VOCAB, prepare_crop_for_model
 
-# A representative middle-school-worksheet answer pool: small whole numbers,
-# some negatives, some one/two-decimal-place values. Not exhaustive -- just
-# varied enough that the model doesn't overfit to one answer shape. Swap in
-# real per-worksheet answer keys here once there's a corpus to draw from.
-_SAMPLE_ANSWER_POOL: List[str] = (
-    [str(n) for n in range(0, 100)]
-    + [str(-n) for n in range(1, 50)]
-    + [f"{n}.{d}" for n in range(0, 20) for d in range(10)]
-    + [f"{n}.{d}{e}" for n in range(0, 10) for d in range(10) for e in (0, 5)]
-)
+# Kept as a local alias (not a re-export) so eval.py's existing `from
+# dataset import _SAMPLE_ANSWER_POOL` keeps working -- the canonical
+# definition lives in graderbot.response_candidates.SAMPLE_ANSWER_POOL, also
+# shared by handwriting_sample_worksheets.py's real-data harvesting (issue
+# #81), so the synthetic and real halves of training data cover the same
+# answer shapes.
+_SAMPLE_ANSWER_POOL: List[str] = list(SAMPLE_ANSWER_POOL)
 
 # Fraction of samples drawn from a near-miss (response_candidates) instead
 # of the true answer -- teaches the model to actually distinguish "9" from

@@ -41,6 +41,22 @@ _DIGIT_CONFUSIONS = {
 
 _PLAIN_NUMERIC_PATTERN = re.compile(r"-?\d+(\.\d+)?")
 
+# A representative middle-school-worksheet answer pool: small whole numbers,
+# some negatives, some one/two-decimal-place values. Not exhaustive -- just
+# varied enough that a model trained on it doesn't overfit to one answer
+# shape. Shared by two things that need the exact same domain distribution:
+# `training/dataset.py`'s synthetic data generator, and
+# `handwriting_sample_worksheets.py`'s "copy this number" worksheets used to
+# harvest real (crop, text) training pairs (issue #81) -- keeping this in
+# one place means the real and synthetic halves of training data cover the
+# same answer shapes rather than drifting apart.
+SAMPLE_ANSWER_POOL = tuple(
+    [str(n) for n in range(0, 100)]
+    + [str(-n) for n in range(1, 50)]
+    + [f"{n}.{d}" for n in range(0, 20) for d in range(10)]
+    + [f"{n}.{d}{e}" for n in range(0, 10) for d in range(10) for e in (0, 5)]
+)
+
 
 def is_plain_numeric(answer: str) -> bool:
     """True if `answer` is a plain (optionally signed, optionally decimal)

@@ -1,6 +1,11 @@
 import numpy as np
 
-from graderbot.response_candidates import generate_candidates, is_plain_numeric
+from graderbot.response_candidates import SAMPLE_ANSWER_POOL, generate_candidates, is_plain_numeric
+
+
+def test_sample_answer_pool_is_all_plain_numeric():
+    assert len(SAMPLE_ANSWER_POOL) > 0
+    assert all(is_plain_numeric(answer) for answer in SAMPLE_ANSWER_POOL)
 
 
 def test_is_plain_numeric_accepts_integers_decimals_and_negatives():

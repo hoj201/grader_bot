@@ -1241,3 +1241,82 @@ def test_dl_query_param_shows_error_when_no_student_pdf(tmp_path, monkeypatch):
 
     assert not at.exception
     assert any("no student PDF" in e.value for e in at.error)
+
+
+def test_handwriting_data_tab_renders_without_error(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+
+    assert not at.exception
+    assert any("Generate copy worksheet" in b.label for b in at.button)
+    assert any("Harvest labels" in b.label for b in at.button)
+
+
+def test_handwriting_data_tab_generates_a_copy_worksheet(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+
+    seen = {}
+    fake_record = storage.WorksheetRecord(
+        prompt="", tex_source="", questions_json="[]", model="handwriting_sample",
+        num_questions=30, id=7,
+    )
+
+    def fake_build(count, template_path, out, bucket, db_path, title="Handwriting Practice", rng=None, on_step=None):
+        seen["count"] = count
+        seen["bucket"] = bucket
+        return out.with_suffix(".tex"), [], fake_record
+
+    monkeypatch.setattr(
+        "graderbot.handwriting_sample_worksheets.build_handwriting_sample_worksheet", fake_build
+    )
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    next(b for b in at.button if b.label == "Generate copy worksheet").click().run()
+
+    assert not at.exception
+    assert seen["count"] == 30
+    assert seen["bucket"] == "bucket"
+    assert any("Created worksheet id=7" in s.value for s in at.success)
+
+
+def test_handwriting_data_tab_harvests_scanned_worksheets(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    _set_env(monkeypatch, db_path)
+
+    from graderbot.handwriting_harvest import HarvestResult
+    from graderbot.storage import HandwritingLabelRecord
+
+    seen = {}
+
+    def fake_harvest(scan_path, db_path, bucket, s3_client=None, on_step=None):
+        seen["bucket"] = bucket
+        return HarvestResult(
+            inserted=[
+                HandwritingLabelRecord(
+                    image_s3url="https://bucket.s3.amazonaws.com/a.png",
+                    image_sha256="sha1",
+                    text="16",
+                    verified=True,
+                )
+            ],
+            skipped=["page 1: could not decode the worksheet QR code."],
+        )
+
+    monkeypatch.setattr("graderbot.handwriting_harvest.harvest_handwriting_labels", fake_harvest)
+
+    at = AppTest.from_file(APP_PATH)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Scanned copy worksheets" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+    next(b for b in at.button if b.label == "Harvest labels").click().run()
+
+    assert not at.exception
+    assert seen["bucket"] == "bucket"
+    assert any("Harvested 1 handwriting label(s)" in s.value for s in at.success)
+    assert any("could not decode the worksheet QR code" in w.value for w in at.warning)
