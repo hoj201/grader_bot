@@ -126,10 +126,12 @@ def boxes(demo_pdf):
     return extract_answer_boxes(str(demo_pdf))
 
 
+@pytest.mark.slow
 def test_extract_answer_boxes_finds_all_ids(boxes):
     assert set(boxes) == {"name", "add001", "sub001", "frac001"}
 
 
+@pytest.mark.slow
 def test_extract_answer_boxes_coordinates_are_relative(boxes):
     for box in boxes.values():
         assert 0 <= box.x_lower_left <= 1
@@ -138,10 +140,12 @@ def test_extract_answer_boxes_coordinates_are_relative(boxes):
         assert 0 < box.height <= 1
 
 
+@pytest.mark.slow
 def test_extract_answer_boxes_sub001_is_below_add001(boxes):
     assert boxes["sub001"].y_lower_left < boxes["add001"].y_lower_left
 
 
+@pytest.mark.slow
 def test_extract_answer_boxes_by_page_single_page_demo(demo_pdf):
     """demo.tex is one page, so the per-page result is a one-element list whose
     only dict matches the flat `extract_answer_boxes` mapping."""
@@ -235,6 +239,7 @@ def test_load_scan_pages_reads_pdf_pages_and_single_raster(tmp_path):
     assert len(load_scan_pages(str(png_path))) == 1
 
 
+@pytest.mark.slow
 def test_read_box_reads_handwritten_answers(boxes):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
@@ -253,6 +258,7 @@ def test_read_box_reads_handwritten_answers(boxes):
     assert read_box(filled_image, boxes["sub001"]).text == "11"
 
 
+@pytest.mark.slow
 def test_read_box_reads_a_handwritten_fraction(boxes):
     if not os.environ.get("MATHPIX_APP_ID") or not os.environ.get("MATHPIX_APP_KEY"):
         pytest.skip("Mathpix credentials are not configured")
@@ -265,6 +271,7 @@ def test_read_box_reads_a_handwritten_fraction(boxes):
     assert read_box(filled_image, boxes["frac001"]).text == r"\frac{3}{4}"
 
 
+@pytest.mark.slow
 def test_extract_name_matches_closest_roster_name(boxes):
     if shutil.which("tesseract") is None:
         pytest.skip("tesseract is not installed")
@@ -714,6 +721,7 @@ def test_markers_survive_printer_margin_clip():
     assert set(centers) == {0, 1, 2, 3}
 
 
+@pytest.mark.slow
 def test_align_document_image_corrects_perspective_warp(warped_photo_png, demo_pdf):
     aligned_image = align_document_image(str(warped_photo_png), str(demo_pdf))
 

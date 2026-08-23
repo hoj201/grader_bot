@@ -55,6 +55,7 @@ def two_page_worksheet(tmp_path_factory):
     return pdf_path, worksheet_id
 
 
+@pytest.mark.slow
 def test_every_page_has_all_four_registration_markers(two_page_worksheet):
     pdf_path, _ = two_page_worksheet
 
@@ -64,6 +65,7 @@ def test_every_page_has_all_four_registration_markers(two_page_worksheet):
         assert sorted(centers.keys()) == [0, 1, 2, 3]
 
 
+@pytest.mark.slow
 def test_every_page_rectifies_and_decodes_the_worksheet_id(two_page_worksheet):
     """Mirrors scan_grader._grade_batch, which rectifies to the canonical
     frame and decodes the worksheet id independently on every scanned page,

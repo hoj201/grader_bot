@@ -54,6 +54,7 @@ def test_decode_returns_none_on_blank_image():
     assert decode_worksheet_id(blank) is None
 
 
+@pytest.mark.slow
 def test_embedded_qr_is_decodable_after_latex_render(tmp_path):
     """End-to-end: a worksheet compiled with an embedded id has a QR code that
     survives a real LaTeX render and rasterization, and decodes back."""

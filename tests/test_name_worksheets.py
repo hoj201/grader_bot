@@ -25,6 +25,7 @@ def test_generate_empty_roster_raises(tmp_path):
         generate_name_worksheets(["  ", "\n"], tmp_path / "out.pdf")
 
 
+@pytest.mark.slow
 def test_one_sheet_per_name_with_printed_name(tmp_path):
     """The merged PDF is one worksheet per roster entry (the #41 template spans
     a fixed number of pages each), and every student's name is printed in the
@@ -49,6 +50,7 @@ def test_one_sheet_per_name_with_printed_name(tmp_path):
         assert name in full_text
 
 
+@pytest.mark.slow
 def test_name_with_latex_special_chars(tmp_path):
     """A roster name with LaTeX-special characters is escaped, not compiled
     verbatim, so it renders a sheet instead of crashing latexmk."""

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import boto3
 import numpy as np
+import pytest
 from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
@@ -52,6 +53,7 @@ def _set_env(monkeypatch, db_path):
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 
 
+@pytest.mark.slow
 def test_gallery_tab_renders_seeded_worksheet_without_error(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path)
@@ -67,6 +69,7 @@ def test_gallery_tab_renders_seeded_worksheet_without_error(tmp_path, monkeypatc
     assert "sty=deadbeef" in caption_texts
 
 
+@pytest.mark.slow
 def test_gallery_tab_shows_title_with_prompt_below_it(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path, title="Linear Equations Practice")
@@ -82,6 +85,7 @@ def test_gallery_tab_shows_title_with_prompt_below_it(tmp_path, monkeypatch):
     assert "10 question algebra worksheet" in caption_texts
 
 
+@pytest.mark.slow
 def test_gallery_tab_shows_unknown_sty_version_when_hash_missing(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -107,6 +111,7 @@ def test_gallery_tab_shows_unknown_sty_version_when_hash_missing(tmp_path, monke
     assert "sty=unknown" in caption_texts
 
 
+@pytest.mark.slow
 def test_gallery_tab_shows_empty_state_with_no_worksheets(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -119,6 +124,7 @@ def test_gallery_tab_shows_empty_state_with_no_worksheets(tmp_path, monkeypatch)
     assert any("No worksheets yet" in info.value for info in at.info)
 
 
+@pytest.mark.slow
 def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -132,6 +138,7 @@ def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
     assert any("Student work" in fu.label for fu in at.get("file_uploader"))
 
 
+@pytest.mark.slow
 def test_grade_tab_uploader_accepts_pdf_jpeg_and_png(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -145,6 +152,7 @@ def test_grade_tab_uploader_accepts_pdf_jpeg_and_png(tmp_path, monkeypatch):
     assert set(uploader.allowed_type) == {".pdf", ".jpg", ".jpeg", ".png"}
 
 
+@pytest.mark.slow
 def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -171,6 +179,7 @@ def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
     assert seen_paths[0].endswith(".png")
 
 
+@pytest.mark.slow
 def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -185,6 +194,7 @@ def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatc
     assert model_selects[0].value == "claude-haiku-4-5"
 
 
+@pytest.mark.slow
 def test_gallery_tab_exposes_questions_json_expander(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     questions_json = '[{"id": "1", "text": "$2+2=$", "answer": "4"}]'
@@ -201,6 +211,7 @@ def test_gallery_tab_exposes_questions_json_expander(tmp_path, monkeypatch):
     assert questions_json in code_values
 
 
+@pytest.mark.slow
 def test_gallery_tab_shows_permanent_download_link(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path, public_id="ws_a1b2c3d4")
@@ -215,6 +226,7 @@ def test_gallery_tab_shows_permanent_download_link(tmp_path, monkeypatch):
     assert "https://grader-bot.fly.dev/?dl=ws_a1b2c3d4" in code_values
 
 
+@pytest.mark.slow
 def test_gallery_tab_omits_permanent_link_without_public_id(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path)
@@ -228,6 +240,7 @@ def test_gallery_tab_omits_permanent_link_without_public_id(tmp_path, monkeypatc
     assert "Permanent link" not in caption_texts
 
 
+@pytest.mark.slow
 def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -251,6 +264,7 @@ def _fake_document():
     )
 
 
+@pytest.mark.slow
 def test_create_ai_shows_preview_before_compiling(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -283,6 +297,7 @@ def test_create_ai_shows_preview_before_compiling(tmp_path, monkeypatch):
     assert any('"id": "1"' in v and '"text": "$2+2=$"' in v for v in code_values)
 
 
+@pytest.mark.slow
 def test_create_ai_accept_compiles_and_stores(tmp_path, monkeypatch, caplog):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -329,6 +344,7 @@ def test_create_ai_accept_compiles_and_stores(tmp_path, monkeypatch, caplog):
     assert "Review generated questions" not in [s.value for s in at.subheader]
 
 
+@pytest.mark.slow
 def test_create_ai_reject_prefills_manual_json_form(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -354,6 +370,7 @@ def test_create_ai_reject_prefills_manual_json_form(tmp_path, monkeypatch):
     assert at.text_area(key="manual_header").value == "Auto Header"
 
 
+@pytest.mark.slow
 def test_logging_is_configured_with_default_level(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -366,6 +383,7 @@ def test_logging_is_configured_with_default_level(tmp_path, monkeypatch):
     assert logging.getLogger("graderbot.app").getEffectiveLevel() == logging.INFO
 
 
+@pytest.mark.slow
 def test_create_from_json_logs_created_worksheet(tmp_path, monkeypatch, caplog):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -407,6 +425,7 @@ def test_create_from_json_logs_created_worksheet(tmp_path, monkeypatch, caplog):
 
 
 @mock_aws
+@pytest.mark.slow
 def test_delete_worksheet_logs_deletion(tmp_path, monkeypatch, caplog):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path)
@@ -426,6 +445,7 @@ def test_delete_worksheet_logs_deletion(tmp_path, monkeypatch, caplog):
     assert any("deleted worksheet id=" in r.message for r in caplog.records)
 
 
+@pytest.mark.slow
 def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
     from graderbot.name_dataset import IngestResult
     from graderbot.storage import NameImageRecord
@@ -468,6 +488,7 @@ def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
     assert len(vectorize_calls) == 1
 
 
+@pytest.mark.slow
 def test_roster_tab_shows_error_when_vectorization_fails(tmp_path, monkeypatch):
     from graderbot.name_dataset import IngestResult
     from graderbot.storage import NameImageRecord
@@ -516,6 +537,7 @@ def test_roster_tab_shows_error_when_vectorization_fails(tmp_path, monkeypatch):
     assert "VOYAGE_API_KEY is not set" in errors
 
 
+@pytest.mark.slow
 def test_roster_tab_manual_add_student_creates_student(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -540,6 +562,7 @@ def test_roster_tab_manual_add_student_creates_student(tmp_path, monkeypatch):
     assert "Added Anna Smith" in successes
 
 
+@pytest.mark.slow
 def test_roster_tab_manual_add_student_requires_first_and_last_name(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -561,6 +584,7 @@ def test_roster_tab_manual_add_student_requires_first_and_last_name(tmp_path, mo
     conn.close()
 
 
+@pytest.mark.slow
 def test_roster_tab_csv_import_adds_students_and_reports_skips(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -589,6 +613,7 @@ def test_roster_tab_csv_import_adds_students_and_reports_skips(tmp_path, monkeyp
     assert "row 3: missing first or last name" in warnings
 
 
+@pytest.mark.slow
 def test_roster_tab_csv_import_shows_error_for_bad_header(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -609,6 +634,7 @@ def test_roster_tab_csv_import_shows_error_for_bad_header(tmp_path, monkeypatch)
     assert any("missing required column" in e.value for e in at.error)
 
 
+@pytest.mark.slow
 def test_roster_tab_transfer_student_moves_classroom(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -631,6 +657,7 @@ def test_roster_tab_transfer_student_moves_classroom(tmp_path, monkeypatch):
     assert [(s.first_name, s.last_name) for s in students_b] == [("Anna", "Smith")]
 
 
+@pytest.mark.slow
 def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -654,6 +681,7 @@ def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, mon
     assert [(s.first_name, s.last_name) for s in students_a] == [("Anna", "Smith")]
 
 
+@pytest.mark.slow
 def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -735,6 +763,7 @@ def _patch_embeddings(monkeypatch, student_id):
     )
 
 
+@pytest.mark.slow
 def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     classroom, anna = _seed_classroom(db_path)
@@ -773,6 +802,7 @@ def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
     assert "Skipped 3 embedding(s)" in warnings
 
 
+@pytest.mark.slow
 def test_visualize_tab_train_classifier_surfaces_missing_data(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _, anna = _seed_classroom(db_path)
@@ -794,6 +824,7 @@ def test_visualize_tab_train_classifier_surfaces_missing_data(tmp_path, monkeypa
     assert any("no 1024-dimensional handwriting embeddings" in e.value for e in at.error)
 
 
+@pytest.mark.slow
 def test_grade_tab_defaults_to_ocr_when_no_classifier_is_trained(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_classroom(db_path)
@@ -809,6 +840,7 @@ def test_grade_tab_defaults_to_ocr_when_no_classifier_is_trained(tmp_path, monke
     assert any("No handwriting classifier has been trained" in c.value for c in at.caption)
 
 
+@pytest.mark.slow
 def test_grade_tab_defaults_to_the_classifier_when_one_exists(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_classroom(db_path)
@@ -823,6 +855,7 @@ def test_grade_tab_defaults_to_the_classifier_when_one_exists(tmp_path, monkeypa
     assert source.value == "Handwriting classifier"
 
 
+@pytest.mark.slow
 def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_classroom(db_path)
@@ -853,6 +886,7 @@ def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatc
     assert seen["name_reader"] is sentinel
 
 
+@pytest.mark.slow
 def test_grade_tab_errors_rather_than_silently_using_ocr(tmp_path, monkeypatch):
     """Picking the classifier when none is saved must not quietly fall back --
     the whole point of the dropdown is knowing which one graded the pile."""
@@ -882,6 +916,7 @@ def test_grade_tab_errors_rather_than_silently_using_ocr(tmp_path, monkeypatch):
     assert any("No handwriting classifier is saved" in e.value for e in at.error)
 
 
+@pytest.mark.slow
 def test_grade_tab_defaults_to_mathpix_for_answers(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -894,6 +929,7 @@ def test_grade_tab_defaults_to_mathpix_for_answers(tmp_path, monkeypatch):
     assert source.value == "Mathpix"
 
 
+@pytest.mark.slow
 def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -920,6 +956,7 @@ def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch)
     assert seen["answer_reader"].allowlist == "0123456789."
 
 
+@pytest.mark.slow
 def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -946,6 +983,7 @@ def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch
     assert seen["answer_reader"].allowlist == "0123456789.xy"
 
 
+@pytest.mark.slow
 def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -971,6 +1009,7 @@ def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
     assert seen["answer_reader"].detect_fractions is False
 
 
+@pytest.mark.slow
 def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -997,6 +1036,7 @@ def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkey
     assert seen["answer_reader"].detect_fractions is True
 
 
+@pytest.mark.slow
 def test_grade_tab_errors_when_easyocr_service_url_is_not_set(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -1020,6 +1060,7 @@ def test_grade_tab_errors_when_easyocr_service_url_is_not_set(tmp_path, monkeypa
     assert any("EASYOCR_SERVICE_URL" in e.value for e in at.error)
 
 
+@pytest.mark.slow
 def test_grade_tab_passes_a_google_vision_reader_when_selected(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -1046,6 +1087,7 @@ def test_grade_tab_passes_a_google_vision_reader_when_selected(tmp_path, monkeyp
     assert seen["answer_reader"].api_key == "test-key"
 
 
+@pytest.mark.slow
 def test_grade_tab_errors_when_google_vision_api_key_is_not_set(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -1069,6 +1111,7 @@ def test_grade_tab_errors_when_google_vision_api_key_is_not_set(tmp_path, monkey
     assert any("GOOGLE_VISION_API_KEY" in e.value for e in at.error)
 
 
+@pytest.mark.slow
 def test_grade_tab_cnn_verifier_falls_back_to_mathpix_when_no_model_exists(tmp_path, monkeypatch):
     # issue #81: selecting the CNN verifier before any model has been
     # trained/exported must not error -- it should grade exactly like
@@ -1102,6 +1145,7 @@ def test_grade_tab_cnn_verifier_falls_back_to_mathpix_when_no_model_exists(tmp_p
     assert any("No trained model found" in c.value for c in at.caption)
 
 
+@pytest.mark.slow
 def test_grade_tab_cnn_verifier_passes_a_response_scorer_when_model_exists(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -1129,6 +1173,7 @@ def test_grade_tab_cnn_verifier_passes_a_response_scorer_when_model_exists(tmp_p
     assert seen["response_scorer"] is sentinel
 
 
+@pytest.mark.slow
 def test_grade_tab_shows_per_page_names_and_flags_low_confidence(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_classroom(db_path)
@@ -1167,6 +1212,7 @@ def test_grade_tab_shows_per_page_names_and_flags_low_confidence(tmp_path, monke
     assert "Anna Smith" not in warnings
 
 
+@pytest.mark.slow
 def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
@@ -1179,6 +1225,7 @@ def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     assert any("S3_BUCKET" in err.value for err in at.error)
 
 
+@pytest.mark.slow
 def test_dl_query_param_redirects_to_presigned_student_pdf(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _seed_worksheet(db_path, public_id="ws_a1b2c3d4")
@@ -1197,6 +1244,7 @@ def test_dl_query_param_redirects_to_presigned_student_pdf(tmp_path, monkeypatch
     assert not at.tabs
 
 
+@pytest.mark.slow
 def test_dl_query_param_shows_error_for_unknown_public_id(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     storage.init_db(db_path).close()
@@ -1217,6 +1265,7 @@ def test_build_permanent_download_url_joins_base_and_public_id():
     )
 
 
+@pytest.mark.slow
 def test_dl_query_param_shows_error_when_no_student_pdf(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
