@@ -32,7 +32,11 @@ def grade_hw(
     OCR'd (for a teacher to read later) unless the box is blank, but is
     never compared against `answer_key` -- its result always carries
     `correct=False, open_ended=True` so callers can tell "not graded" apart
-    from "graded wrong" and skip it when scoring or marking up a page."""
+    from "graded wrong" and skip it when scoring or marking up a page.
+
+    Each result also carries Mathpix's confidence and raw pre-repair text for
+    the response (issue #70), so a wrong answer can be traced back to what
+    Mathpix actually saw -- see `ocr.OcrResult`."""
     open_ended = open_ended or {}
     results: Dict[LiteralString, QuestionResult] = {}
     for qid, box in boxes.items():
@@ -42,12 +46,26 @@ def grade_hw(
         if crop.size > 0 and is_blank(crop):
             results[qid] = QuestionResult(answer=answer, response="", correct=False, blank=True, open_ended=is_open_ended)
             continue
-        response = read_box(hw_image, box)
+        ocr_result = read_box(hw_image, box)
+        response = ocr_result.text
         if is_open_ended:
-            results[qid] = QuestionResult(answer=answer, response=response, correct=False, open_ended=True)
+            results[qid] = QuestionResult(
+                answer=answer,
+                response=response,
+                correct=False,
+                open_ended=True,
+                ocr_confidence=ocr_result.confidence,
+                ocr_raw=ocr_result.raw_text,
+            )
             continue
         correct = grade_response(response, answer)
-        results[qid] = QuestionResult(answer=answer, response=response, correct=correct)
+        results[qid] = QuestionResult(
+            answer=answer,
+            response=response,
+            correct=correct,
+            ocr_confidence=ocr_result.confidence,
+            ocr_raw=ocr_result.raw_text,
+        )
     return results
 
 

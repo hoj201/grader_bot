@@ -2,7 +2,8 @@ import base64
 import difflib
 import os
 import re
-from typing import List, LiteralString, Tuple
+from dataclasses import dataclass
+from typing import List, LiteralString, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -57,6 +58,24 @@ _GREEK_MISREAD_PATTERN = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class OcrResult:
+    """One Mathpix call's result, kept around for debugging misreads
+    (issue #70) instead of collapsing straight to a string:
+
+    - `text`: the repaired text grading actually compares against, after
+      `_strip_math_delimiters`/`_fix_stray_slashes`/`_fix_greek_misreads`.
+    - `raw_text`: Mathpix's own `text` field before any of that repair, so a
+      wrong answer can be traced back to what Mathpix literally read.
+    - `confidence`: Mathpix's self-reported confidence for the read (0-1),
+      or `None` if the response didn't include one.
+    """
+
+    text: str
+    raw_text: str
+    confidence: Optional[float]
+
+
 def _tesseract_ocr_name(image: np.ndarray) -> str:
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
     upscaled = cv2.resize(
@@ -109,7 +128,7 @@ def _fix_greek_misreads(text: str) -> str:
     return _GREEK_MISREAD_PATTERN.sub(lambda m: _GREEK_MISREAD_MAP[m.group(0)], text)
 
 
-def _mathpix_ocr(image: np.ndarray) -> str:
+def _mathpix_ocr(image: np.ndarray) -> OcrResult:
     app_id = os.environ.get("MATHPIX_APP_ID")
     app_key = os.environ.get("MATHPIX_APP_KEY")
     if not app_id or not app_key:
@@ -133,7 +152,8 @@ def _mathpix_ocr(image: np.ndarray) -> str:
     )
     response.raise_for_status()
     raw = response.json()
-    text = _fix_greek_misreads(_fix_stray_slashes(_strip_math_delimiters(raw.get("text", ""))))
+    raw_text = raw.get("text", "")
+    text = _fix_greek_misreads(_fix_stray_slashes(_strip_math_delimiters(raw_text)))
 
     # Log the exact bytes posted plus the raw response for a future OCR
     # training set (issue #1). Self-gates on env config and is non-fatal.
@@ -141,11 +161,12 @@ def _mathpix_ocr(image: np.ndarray) -> str:
 
     log_mathpix_call(encoded.tobytes(), raw, text)
 
-    return text
+    return OcrResult(text=text, raw_text=raw_text, confidence=raw.get("confidence"))
 
 
-def read_box(image: np.ndarray, box: Box) -> str:
+def read_box(image: np.ndarray, box: Box) -> OcrResult:
     """Reads the handwritten LaTeX answer inside `box` on `image` (an
-    already-loaded RGB numpy array, e.g. from `load_image_rgb`)."""
+    already-loaded RGB numpy array, e.g. from `load_image_rgb`). See
+    `OcrResult` for what's returned beyond the repaired text."""
     cropped = _crop_box(image, box, _BOX_INSET)
     return _mathpix_ocr(cropped)

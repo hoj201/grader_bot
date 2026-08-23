@@ -18,7 +18,7 @@ from graderbot.imaging import (
     render_pdf_page_image,
 )
 from graderbot.models import Box, QuestionResult
-from graderbot.ocr import extract_name, read_box
+from graderbot.ocr import OcrResult, extract_name, read_box
 from graderbot.registration import (
     _MARKER_INSET_IN,
     _MARKER_SIZE_IN,
@@ -246,8 +246,8 @@ def test_read_box_reads_handwritten_answers(boxes):
     filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"add001": "12", "sub001": "11"})[0]
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
-    assert read_box(filled_image, boxes["add001"]) == "12"
-    assert read_box(filled_image, boxes["sub001"]) == "11"
+    assert read_box(filled_image, boxes["add001"]).text == "12"
+    assert read_box(filled_image, boxes["sub001"]).text == "11"
 
 
 def test_read_box_reads_a_handwritten_fraction(boxes):
@@ -259,7 +259,7 @@ def test_read_box_reads_a_handwritten_fraction(boxes):
     filled_image_bgr = fill_worksheet(str(DEMO_TEX), {"frac001": r"\frac{3}{4}"})[0]
     filled_image = cv2.cvtColor(filled_image_bgr, cv2.COLOR_BGR2RGB)
 
-    assert read_box(filled_image, boxes["frac001"]) == r"\frac{3}{4}"
+    assert read_box(filled_image, boxes["frac001"]).text == r"\frac{3}{4}"
 
 
 def test_extract_name_matches_closest_roster_name(boxes):
@@ -360,25 +360,30 @@ def test_grade_hw_returns_per_question_answer_response_and_correctness(monkeypat
 
     def fake_read_box(image, box):
         qid = next(qid for qid, b in boxes.items() if b is box)
-        return responses[qid]
+        return OcrResult(text=responses[qid], raw_text=responses[qid], confidence=0.9)
 
     monkeypatch.setattr("graderbot.grading.read_box", fake_read_box)
 
     results = grade_hw(answer_key, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
     assert results == {
-        "q1": QuestionResult(answer="12", response="12", correct=True),
-        "q2": QuestionResult(answer="8", response="7", correct=False),
+        "q1": QuestionResult(answer="12", response="12", correct=True, ocr_confidence=0.9, ocr_raw="12"),
+        "q2": QuestionResult(answer="8", response="7", correct=False, ocr_confidence=0.9, ocr_raw="7"),
     }
 
 
 def test_grade_hw_marks_blank_response_incorrect(monkeypatch):
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.05)}
-    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "")
+    monkeypatch.setattr(
+        "graderbot.grading.read_box",
+        lambda image, box: OcrResult(text="", raw_text="", confidence=0.1),
+    )
 
     results = grade_hw({"q1": "12"}, boxes, np.zeros((10, 10, 3), dtype=np.uint8))
 
-    assert results == {"q1": QuestionResult(answer="12", response="", correct=False)}
+    assert results == {
+        "q1": QuestionResult(answer="12", response="", correct=False, ocr_confidence=0.1, ocr_raw="")
+    }
 
 
 def test_grade_hw_skips_mathpix_for_a_blank_box(monkeypatch):
@@ -404,12 +409,22 @@ def test_grade_hw_never_grades_an_open_ended_question(monkeypatch):
     boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
     x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
     cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
-    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "I like fractions")
+    monkeypatch.setattr(
+        "graderbot.grading.read_box",
+        lambda image, box: OcrResult(text="I like fractions", raw_text="I like fractions", confidence=0.8),
+    )
 
     results = grade_hw({"q1": ""}, boxes, image, open_ended={"q1": True})
 
     assert results == {
-        "q1": QuestionResult(answer="", response="I like fractions", correct=False, open_ended=True)
+        "q1": QuestionResult(
+            answer="",
+            response="I like fractions",
+            correct=False,
+            open_ended=True,
+            ocr_confidence=0.8,
+            ocr_raw="I like fractions",
+        )
     }
 
 
@@ -435,11 +450,18 @@ def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
     # Draw ink inside the box's pixel rect so it clears the blank threshold.
     x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
     cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
-    monkeypatch.setattr("graderbot.grading.read_box", lambda image, box: "12")
+    monkeypatch.setattr(
+        "graderbot.grading.read_box",
+        lambda image, box: OcrResult(text="12", raw_text="12", confidence=0.95),
+    )
 
     results = grade_hw({"q1": "12"}, boxes, image)
 
-    assert results == {"q1": QuestionResult(answer="12", response="12", correct=True, blank=False)}
+    assert results == {
+        "q1": QuestionResult(
+            answer="12", response="12", correct=True, blank=False, ocr_confidence=0.95, ocr_raw="12"
+        )
+    }
 
 
 def test_ink_fraction_is_zero_for_a_blank_image():

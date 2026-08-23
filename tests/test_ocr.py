@@ -1,5 +1,6 @@
 """Tests for the name-box OCR helpers (issue #58) and the Mathpix answer-box
-OCR request/cleanup (alphabets_allowed + Greek-letter misread fix).
+OCR request/cleanup (alphabets_allowed + Greek-letter misread fix) and result
+(OcrResult text/raw_text/confidence, issue #70).
 
 These monkeypatch the Tesseract/Mathpix calls so they run without the binary
 or a live API key; the end-to-end read of a real rendered worksheet lives in
@@ -80,9 +81,12 @@ def test_fix_greek_misreads_leaves_plain_digits_untouched():
     assert _fix_greek_misreads(r"\frac{3}{4}") == r"\frac{3}{4}"
 
 
-def _mock_mathpix_response(text: str) -> MagicMock:
+def _mock_mathpix_response(text: str, confidence=0.95) -> MagicMock:
     response = MagicMock()
-    response.json.return_value = {"text": text}
+    payload = {"text": text}
+    if confidence is not None:
+        payload["confidence"] = confidence
+    response.json.return_value = payload
     return response
 
 
@@ -116,4 +120,41 @@ def test_mathpix_ocr_fixes_greek_misreads_in_the_response(monkeypatch):
     with patch(
         "graderbot.ocr.requests.post", return_value=_mock_mathpix_response(r"\alpha")
     ):
-        assert ocr._mathpix_ocr(image) == "2"
+        result = ocr._mathpix_ocr(image)
+
+    # `text` is repaired for grading; `raw_text` keeps what Mathpix actually
+    # said, so a misread can still be diagnosed (issue #70).
+    assert result.text == "2"
+    assert result.raw_text == r"\alpha"
+
+
+def test_mathpix_ocr_returns_mathpix_confidence(monkeypatch):
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+    monkeypatch.delenv("MATHPIX_LOG_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    image = np.full((40, 40, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.ocr.requests.post",
+        return_value=_mock_mathpix_response("12", confidence=0.42),
+    ):
+        result = ocr._mathpix_ocr(image)
+
+    assert result.confidence == 0.42
+
+
+def test_mathpix_ocr_confidence_is_none_when_mathpix_omits_it(monkeypatch):
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+    monkeypatch.delenv("MATHPIX_LOG_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    image = np.full((40, 40, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.ocr.requests.post",
+        return_value=_mock_mathpix_response("12", confidence=None),
+    ):
+        result = ocr._mathpix_ocr(image)
+
+    assert result.confidence is None

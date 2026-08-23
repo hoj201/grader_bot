@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -16,3 +17,9 @@ class QuestionResult:
     correct: bool
     blank: bool = False  # True if the box was skipped as unanswered (issue #66); markup draws nothing for it
     open_ended: bool = False  # True if the question has no single correct answer (issue #65); never graded right/wrong, and markup draws nothing for it
+    # Debugging aid for OCR misreads (issue #70): Mathpix's self-reported
+    # confidence for `response` and its raw pre-repair text (see
+    # ocr.OcrResult). Both None when the box was never sent to Mathpix
+    # (blank box, issue #66).
+    ocr_confidence: Optional[float] = None
+    ocr_raw: Optional[str] = None
