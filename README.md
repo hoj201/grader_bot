@@ -223,22 +223,27 @@ Logging failures are non-fatal — they never interrupt OCR or grading. Set in
 MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
-### Answer OCR: Mathpix vs EasyOCR
+### Answer OCR: Mathpix vs EasyOCR vs Google Cloud Vision
 Answer boxes are read by Mathpix by default (`graderbot/ocr.py`), which
 handles handwritten LaTeX fractions well but is tuned for college-level math
 and occasionally misreads a sloppy digit (issue #70: "9" as "G", "14" as
 "1 h"). The Grade tab's "Read answers with" dropdown can switch a run to
-EasyOCR instead, restricted to a character allowlist (default `0123456789.`,
-widened per run from the same dropdown, e.g. append `xy` for an algebra
-worksheet) — EasyOCR can't read fractions, so stick with Mathpix for
-worksheets that have them.
+EasyOCR or Google Cloud Vision instead — neither reads fractions, so stick
+with Mathpix for worksheets that have them:
+- **EasyOCR** is restricted to a character allowlist (default `0123456789.`,
+  widened per run from the same dropdown, e.g. append `xy` for an algebra
+  worksheet).
+- **Google Cloud Vision** uses `DOCUMENT_TEXT_DETECTION` (Google's mode for
+  dense/handwritten text) with no allowlist support.
 
-`graderbot/answer_reader.py`'s two `AnswerReader`s (`MathpixAnswerReader`,
-`EasyOcrAnswerReader`) mirror the existing `NameReader` pattern used for
-student identification. EasyOCR runs as a **separate sidecar container**
-(`easyocr_service/`) rather than a `graderbot` dependency: its only real
-dependency, torch, ships no wheel for Intel Mac and is heavy to bundle into
-the main deploy image. Run it locally with:
+`graderbot/answer_reader.py`'s three `AnswerReader`s (`MathpixAnswerReader`,
+`EasyOcrAnswerReader`, `GoogleVisionAnswerReader`) mirror the existing
+`NameReader` pattern used for student identification.
+
+**EasyOCR** runs as a **separate sidecar container** (`easyocr_service/`)
+rather than a `graderbot` dependency: its only real dependency, torch, ships
+no wheel for Intel Mac and is heavy to bundle into the main deploy image. Run
+it locally with:
 ```shell
 docker compose up -d easyocr
 ```
@@ -257,6 +262,16 @@ project's venv):
 docker compose build easyocr
 docker compose run --rm easyocr pytest -q
 ```
+
+**Google Cloud Vision**, unlike EasyOCR, needs no sidecar and no new Python
+dependency — `GoogleVisionAnswerReader` calls the Vision REST API directly
+with `requests`, the same shape as the Mathpix call. Set in `.env`:
+```
+GOOGLE_VISION_API_KEY=<your-api-key>
+```
+(from a GCP project with the Cloud Vision API enabled — see
+https://cloud.google.com/vision/docs/setup). Works on fly.io as-is, since
+it's a plain HTTPS call.
 
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box

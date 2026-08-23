@@ -22,7 +22,11 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graderbot import embedding, name_classifier, storage
-from graderbot.answer_reader import EASYOCR_DEFAULT_ALLOWLIST, EasyOcrAnswerReader
+from graderbot.answer_reader import (
+    EASYOCR_DEFAULT_ALLOWLIST,
+    EasyOcrAnswerReader,
+    GoogleVisionAnswerReader,
+)
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
@@ -71,6 +75,7 @@ _OCR_NAME_SOURCE = "OCR (Tesseract)"
 
 _MATHPIX_ANSWER_SOURCE = "Mathpix"
 _EASYOCR_ANSWER_SOURCE = "EasyOCR"
+_GOOGLE_VISION_ANSWER_SOURCE = "Google Cloud Vision"
 
 
 def _embedder_dim() -> "int | None":
@@ -900,7 +905,7 @@ def render_grade() -> None:
             "train one on the Visualize tab to use it here."
         )
 
-    answer_options = [_MATHPIX_ANSWER_SOURCE, _EASYOCR_ANSWER_SOURCE]
+    answer_options = [_MATHPIX_ANSWER_SOURCE, _EASYOCR_ANSWER_SOURCE, _GOOGLE_VISION_ANSWER_SOURCE]
     answer_source = st.selectbox(
         "Read answers with",
         answer_options,
@@ -919,6 +924,11 @@ def render_grade() -> None:
             "EasyOCR can't read fractions — use Mathpix for worksheets with "
             "fraction answers. Requires the easyocr_service sidecar "
             "(`docker compose up -d easyocr`) and EASYOCR_SERVICE_URL set."
+        )
+    elif answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
+        st.caption(
+            "Google Cloud Vision can't read fractions either — use Mathpix for "
+            "worksheets with fraction answers. Requires GOOGLE_VISION_API_KEY."
         )
 
     submitted = st.button("Grade", type="primary", disabled=uploaded is None)
@@ -948,6 +958,12 @@ def render_grade() -> None:
         allowlist = EASYOCR_DEFAULT_ALLOWLIST + easyocr_extra_chars
         try:
             answer_reader = EasyOcrAnswerReader(allowlist=allowlist)
+        except EnvironmentError as e:
+            st.error(str(e))
+            return
+    elif answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
+        try:
+            answer_reader = GoogleVisionAnswerReader()
         except EnvironmentError as e:
             st.error(str(e))
             return

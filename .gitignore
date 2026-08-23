@@ -573,3 +573,10 @@ TSWLatexianTemp*
 # worksheet_synth.py latexmk_worksheet() output dirs
 build_cv/
 build_blank/
+
+# GCP service-account key JSON files the gcloud console drops in the cwd by
+# default when creating one (issue #70 setup). This project authenticates to
+# Google Cloud Vision via GOOGLE_VISION_API_KEY (REST + API key, not a
+# service account -- see graderbot/answer_reader.py), so one should never be
+# needed here; ignored defensively so a future one is never committed.
+/*.json
