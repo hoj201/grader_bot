@@ -32,6 +32,30 @@ _MATH_DELIMITER_PATTERN = re.compile(
 # name) is therefore a misread of the numeral "1".
 _STRAY_SLASH_PATTERN = re.compile(r"[/\\](?![a-zA-Z])")
 
+# NOTE: Mathpix's `alphabets_allowed` request param (non-Latin *script*
+# toggles - hi/zh/ja/ko/ru/th/ta/te/gu/bn/vi) looked like a fix for
+# misreads, but real testing showed it also tightens Mathpix's internal
+# confidence gating for handwritten math: it made Mathpix outright refuse
+# (`"error": "image_no_content"`) on a clean, legible handwritten
+# `\frac{3}{4}` that read correctly without it. This pipeline deliberately
+# repairs Mathpix's garbled-but-present guesses downstream
+# (_fix_stray_slashes, grading.py's _iter_fraction_reinterpretations) rather
+# than relying on Mathpix's own confidence, so a stricter refusal-prone mode
+# is a net loss here - don't re-add `alphabets_allowed` without re-verifying
+# against real handwritten crops first.
+
+# Answers are always plain numbers or `\frac{a}{b}` - a lone Greek letter
+# can never be a legitimate answer, so any occurrence is a misread of a
+# handwritten digit. Confirmed confusion pairs go here as they're observed
+# (see the Mathpix call log, issue #1); start with the one that prompted
+# this - a hand-drawn "2" (with its looped tail) read as "\alpha".
+_GREEK_MISREAD_MAP = {
+    r"\alpha": "2",
+}
+_GREEK_MISREAD_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in _GREEK_MISREAD_MAP)
+)
+
 
 def _tesseract_ocr_name(image: np.ndarray) -> str:
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
@@ -81,6 +105,10 @@ def _fix_stray_slashes(text: str) -> str:
     return _STRAY_SLASH_PATTERN.sub("1", text)
 
 
+def _fix_greek_misreads(text: str) -> str:
+    return _GREEK_MISREAD_PATTERN.sub(lambda m: _GREEK_MISREAD_MAP[m.group(0)], text)
+
+
 def _mathpix_ocr(image: np.ndarray) -> str:
     app_id = os.environ.get("MATHPIX_APP_ID")
     app_key = os.environ.get("MATHPIX_APP_KEY")
@@ -105,7 +133,7 @@ def _mathpix_ocr(image: np.ndarray) -> str:
     )
     response.raise_for_status()
     raw = response.json()
-    text = _fix_stray_slashes(_strip_math_delimiters(raw.get("text", "")))
+    text = _fix_greek_misreads(_fix_stray_slashes(_strip_math_delimiters(raw.get("text", ""))))
 
     # Log the exact bytes posted plus the raw response for a future OCR
     # training set (issue #1). Self-gates on env config and is non-fatal.

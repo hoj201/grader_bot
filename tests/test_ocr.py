@@ -1,15 +1,19 @@
-"""Tests for the name-box OCR helpers (issue #58).
+"""Tests for the name-box OCR helpers (issue #58) and the Mathpix answer-box
+OCR request/cleanup (alphabets_allowed + Greek-letter misread fix).
 
-These monkeypatch the Tesseract call so they run without the binary installed;
-the end-to-end read of a real rendered worksheet lives in test_graderbot.py.
+These monkeypatch the Tesseract/Mathpix calls so they run without the binary
+or a live API key; the end-to-end read of a real rendered worksheet lives in
+test_graderbot.py.
 """
+
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from graderbot import ocr
 from graderbot.models import Box
-from graderbot.ocr import extract_name, extract_name_scored
+from graderbot.ocr import _fix_greek_misreads, extract_name, extract_name_scored
 
 FULL_BOX = Box(x_lower_left=0.0, y_lower_left=0.0, width=1.0, height=1.0)
 ROSTER = ["Jane Doe", "John Smith", "Alice Johnson"]
@@ -62,3 +66,54 @@ def test_extract_name_returns_empty_string_on_no_match(monkeypatch, blank_page):
     monkeypatch.setattr(ocr, "_tesseract_ocr_name", lambda image: "zzzzzzzzzz")
 
     assert extract_name(blank_page, FULL_BOX, ROSTER) == ""
+
+
+def test_fix_greek_misreads_replaces_alpha_with_two():
+    assert _fix_greek_misreads(r"\alpha") == "2"
+
+
+def test_fix_greek_misreads_replaces_alpha_inside_a_fraction():
+    assert _fix_greek_misreads(r"\frac{\alpha}{3}") == r"\frac{2}{3}"
+
+
+def test_fix_greek_misreads_leaves_plain_digits_untouched():
+    assert _fix_greek_misreads(r"\frac{3}{4}") == r"\frac{3}{4}"
+
+
+def _mock_mathpix_response(text: str) -> MagicMock:
+    response = MagicMock()
+    response.json.return_value = {"text": text}
+    return response
+
+
+def test_mathpix_ocr_does_not_request_alphabets_allowed(monkeypatch):
+    """Regression guard for the alphabets_allowed experiment: real testing
+    showed it makes Mathpix refuse to guess on legible handwritten math
+    (see the comment above _GREEK_MISREAD_MAP in ocr.py), so it must not be
+    sent."""
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+    monkeypatch.delenv("MATHPIX_LOG_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    image = np.full((40, 40, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.ocr.requests.post", return_value=_mock_mathpix_response("12")
+    ) as mock_post:
+        ocr._mathpix_ocr(image)
+
+    _, kwargs = mock_post.call_args
+    assert "alphabets_allowed" not in kwargs["json"]
+
+
+def test_mathpix_ocr_fixes_greek_misreads_in_the_response(monkeypatch):
+    monkeypatch.setenv("MATHPIX_APP_ID", "test-id")
+    monkeypatch.setenv("MATHPIX_APP_KEY", "test-key")
+    monkeypatch.delenv("MATHPIX_LOG_BUCKET", raising=False)
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    image = np.full((40, 40, 3), 255, np.uint8)
+
+    with patch(
+        "graderbot.ocr.requests.post", return_value=_mock_mathpix_response(r"\alpha")
+    ):
+        assert ocr._mathpix_ocr(image) == "2"
