@@ -10,7 +10,10 @@ import pytest
 
 from graderbot.grading import grade_hw, grade_response, is_correct
 from graderbot.imaging import (
+    _BORDER_MARGIN_PX,
+    _crop_box,
     box_pixel_rect,
+    crop_box_content_aware,
     ink_fraction,
     is_blank,
     load_pdf_pages_rgb,
@@ -497,6 +500,79 @@ def test_is_blank_false_for_faint_pencil_ink():
     image = np.full((50, 200, 3), 255, dtype=np.uint8)
     cv2.rectangle(image, (10, 10), (30, 40), (170, 170, 170), -1)  # ~3% of the box
     assert not is_blank(image)
+
+
+def _draw_box_border(image, box, image_width, image_height, thickness=1):
+    """Draws just the printed rectangle outline for `box` -- the border
+    `crop_box_content_aware` must exclude, distinct from the ink inside it."""
+    x0, y0, x1, y1 = box_pixel_rect(box, image_width, image_height)
+    cv2.rectangle(image, (x0, y0), (x1 - 1, y1 - 1), (0, 0, 0), thickness)
+
+
+def test_crop_box_content_aware_falls_back_to_fixed_inset_when_blank():
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    box = Box(0.1, 0.5, 0.3, 0.2)
+    _draw_box_border(image, box, 200, 200)
+
+    result = crop_box_content_aware(image, box, fallback_inset=0.08)
+
+    assert np.array_equal(result, _crop_box(image, box, 0.08))
+
+
+def test_crop_box_content_aware_excludes_the_border():
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    box = Box(0.1, 0.5, 0.3, 0.2)
+    _draw_box_border(image, box, 200, 200)
+    x0, y0, x1, y1 = box_pixel_rect(box, 200, 200)
+    cv2.rectangle(image, (x0 + 15, y0 + 10), (x0 + 25, y0 + 20), (0, 0, 0), -1)  # ink well inside
+
+    result = crop_box_content_aware(image, box, fallback_inset=0.08)
+
+    # None of the four 1px-wide border edges made it into the crop.
+    gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY)
+    assert (gray[0, :] > 200).all()
+    assert (gray[-1, :] > 200).all()
+    assert (gray[:, 0] > 200).all()
+    assert (gray[:, -1] > 200).all()
+
+
+def test_crop_box_content_aware_keeps_ink_written_flush_against_an_edge():
+    # Reproduces issue #70's follow-up: a multi-digit answer written flush
+    # against the box's left edge (as opposed to centered, with margin to
+    # spare) had its leading digit sliced off entirely by the old
+    # fixed-fraction inset, because that fraction is computed from the box's
+    # own (wide) width rather than the border's actual thickness.
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    box = Box(0.1, 0.5, 0.6, 0.15)  # a wide box, like a real answer box
+    _draw_box_border(image, box, 200, 200)
+    x0, y0, x1, y1 = box_pixel_rect(box, 200, 200)
+    # A vertical stroke just past the border -- inside the fixed-fraction
+    # inset's dead zone, but real content, not border.
+    stroke_x = x0 + _BORDER_MARGIN_PX + 2
+    cv2.line(image, (stroke_x, y0 + 5), (stroke_x, y1 - 5), (0, 0, 0), 2)
+
+    fixed_inset_crop = _crop_box(image, box, 0.08)
+    fixed_inset_gray = cv2.cvtColor(fixed_inset_crop, cv2.COLOR_RGB2GRAY)
+    assert (fixed_inset_gray < 200).sum() == 0  # confirms the old behavior clips it
+
+    result = crop_box_content_aware(image, box, fallback_inset=0.08)
+    result_gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY)
+    assert (result_gray < 200).any()  # the new crop keeps it
+
+
+def test_crop_box_content_aware_pads_around_a_tight_answer():
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    box = Box(0.1, 0.5, 0.4, 0.2)
+    _draw_box_border(image, box, 200, 200)
+    x0, y0, x1, y1 = box_pixel_rect(box, 200, 200)
+    ink_w, ink_h = 10, 8
+    cv2.rectangle(image, (x0 + 20, y0 + 20), (x0 + 20 + ink_w, y0 + 20 + ink_h), (0, 0, 0), -1)
+
+    result = crop_box_content_aware(image, box, fallback_inset=0.08)
+
+    # Tighter than the whole box, but bigger than the bare ink -- padding was added.
+    assert ink_h < result.shape[0] < (y1 - y0)
+    assert ink_w < result.shape[1] < (x1 - x0)
 
 
 def test_box_pixel_rect_full_page_box_covers_whole_image():

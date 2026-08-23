@@ -11,7 +11,7 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 
-from graderbot.imaging import _crop_box
+from graderbot.imaging import _crop_box, crop_box_content_aware
 from graderbot.models import Box
 
 load_dotenv()
@@ -182,5 +182,5 @@ def read_box(image: np.ndarray, box: Box) -> OcrResult:
     """Reads the handwritten LaTeX answer inside `box` on `image` (an
     already-loaded RGB numpy array, e.g. from `load_image_rgb`). See
     `OcrResult` for what's returned beyond the repaired text."""
-    cropped = _crop_box(image, box, _BOX_INSET)
+    cropped = crop_box_content_aware(image, box, fallback_inset=_BOX_INSET)
     return _mathpix_ocr(cropped)

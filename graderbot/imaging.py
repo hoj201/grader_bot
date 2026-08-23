@@ -53,6 +53,62 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
     return image[y0:y1, x0:x1]
 
 
+# Pixel margin (not a fraction of the box's own size, unlike `_BOX_INSET` in
+# ocr.py) used only to skip past the printed border stroke before looking for
+# ink. The border renders at a roughly constant few-pixel width regardless of
+# how big the box itself is (issue #70 follow-up), so a *fractional* inset
+# meant to clear it ends up far larger than necessary on a wide/short answer
+# box -- e.g. 8% of a 180px-wide box is ~14px, enough to slice off a digit
+# written flush against the left edge, while 8% of the box's own ~60px height
+# is only ~5px, barely past the border. `crop_box_content_aware` below uses
+# this small, size-independent margin instead. Measured directly off a real
+# scan's rectified box borders: the top/bottom rule is a solid ~2px line
+# (dark-pixel row fraction ~1.0 for 1-2 rows, then 0); the left/right rule is
+# much fainter (row/col dark fraction ~0.05 throughout, likely rendering
+# antialiasing rather than a real stroke). 3px clears the solid case with a
+# 1px buffer, without re-introducing the old fractional inset's problem of
+# eating real ink that sits close to an edge.
+_BORDER_MARGIN_PX = 3
+# Padding re-added around the detected ink's own bounding box, so a crop
+# isn't shrink-wrapped pixel-tight to the ink (which starves OCR of the
+# surrounding context it expects).
+_CONTENT_PAD_PX = 6
+
+
+def crop_box_content_aware(image: np.ndarray, box: Box, fallback_inset: float) -> np.ndarray:
+    """Crops `box` on `image` to the actual ink inside it, instead of a fixed
+    fraction of the box's own size (`_crop_box`'s `inset`). A fixed-fraction
+    inset clips real handwriting whenever it's written close to a box edge --
+    on a wide box this can slice off an entire leading digit (issue #70
+    follow-up). This crops past the border by a small constant pixel margin
+    (`_BORDER_MARGIN_PX`), finds the bounding box of ink (pixels darker than
+    `_INK_THRESHOLD`) inside that, and returns that bounding box plus
+    `_CONTENT_PAD_PX` padding, clamped so the border can't creep back in.
+
+    Falls back to the legacy `_crop_box(image, box, fallback_inset)` when no
+    ink is found (or the box is too small for the border margin) -- callers
+    that check `is_blank`/`ink_fraction` on the result rely on that shape.
+    """
+    image_height, image_width = image.shape[:2]
+    x0, y0, x1, y1 = box_pixel_rect(box, image_width, image_height, inset=0.0)
+    bx0, by0 = x0 + _BORDER_MARGIN_PX, y0 + _BORDER_MARGIN_PX
+    bx1, by1 = x1 - _BORDER_MARGIN_PX, y1 - _BORDER_MARGIN_PX
+    if bx1 <= bx0 or by1 <= by0:
+        return _crop_box(image, box, fallback_inset)
+
+    interior = image[by0:by1, bx0:bx1]
+    gray = cv2.cvtColor(interior, cv2.COLOR_RGB2GRAY)
+    mask = gray < _INK_THRESHOLD
+    if not mask.any():
+        return _crop_box(image, box, fallback_inset)
+
+    ys, xs = np.where(mask)
+    h, w = interior.shape[:2]
+    iy0, iy1 = max(0, ys.min() - _CONTENT_PAD_PX), min(h, ys.max() + 1 + _CONTENT_PAD_PX)
+    ix0, ix1 = max(0, xs.min() - _CONTENT_PAD_PX), min(w, xs.max() + 1 + _CONTENT_PAD_PX)
+    return interior[iy0:iy1, ix0:ix1]
+
+
 # A crop with less than this fraction of dark pixels is treated as blank --
 # i.e. nothing was written in it. Originally tuned for name-collection grid
 # boxes (name_dataset.ingest_name_sheets); generalized here into the shared

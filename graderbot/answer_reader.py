@@ -47,7 +47,7 @@ import cv2
 import numpy as np
 import requests
 
-from graderbot.imaging import _crop_box
+from graderbot.imaging import crop_box_content_aware
 from graderbot.models import Box
 from graderbot.ocr import _BOX_INSET, OcrResult, read_box
 
@@ -138,7 +138,7 @@ class EasyOcrAnswerReader:
             )
 
     def read(self, image: np.ndarray, box: Box) -> OcrResult:
-        cropped = _crop_box(image, box, _BOX_INSET)
+        cropped = crop_box_content_aware(image, box, fallback_inset=_BOX_INSET)
         if self.detect_fractions:
             fraction_result = self._read_as_fraction(cropped)
             if fraction_result is not None:
@@ -266,7 +266,7 @@ class GoogleVisionAnswerReader:
             )
 
     def read(self, image: np.ndarray, box: Box) -> OcrResult:
-        cropped = _crop_box(image, box, _BOX_INSET)
+        cropped = crop_box_content_aware(image, box, fallback_inset=_BOX_INSET)
         success, encoded = cv2.imencode(".png", cv2.cvtColor(cropped, cv2.COLOR_RGB2BGR))
         if not success:
             raise ValueError("Could not encode cropped box image")
