@@ -1,6 +1,6 @@
 """Read the student's answer off a scanned worksheet's answer box (issue #70).
 
-Three interchangeable strategies sit behind one `AnswerReader` protocol:
+Four interchangeable strategies sit behind one `AnswerReader` protocol:
 
 - `MathpixAnswerReader` -- wraps the existing `ocr.read_box`. This is what
   grading has always done, and remains the only choice that reads a
@@ -33,6 +33,16 @@ Three interchangeable strategies sit behind one `AnswerReader` protocol:
   unlike EasyOCR, the Vision REST API is a plain HTTPS call, so it's as
   lightweight as Mathpix. It also has no math-symbol understanding and no
   character allowlist, so it cannot read fractions either.
+- `NoOcrAnswerReader` (issue #83) -- doesn't attempt to read the box's
+  contents at all. By the time `grading.grade_hw` calls any reader's
+  `.read()`, its own ink-detection blank check
+  (`imaging.is_blank`) has already decided the box isn't blank -- so this
+  reader just reports an empty response, which grading treats as answered
+  but wrong and `markup` annotates with the correct answer, same as a wrong
+  OCR read. This gives a student real per-question feedback (which answers
+  they got right) without OCR ever having to transcribe -- and potentially
+  misread -- their handwriting, for a class where none of the three OCR
+  backends above read reliably enough to trust.
 
 Which one grading uses is a runtime choice made in the Grade tab, because
 which backend reads a given class's handwriting best isn't known ahead of
@@ -53,6 +63,7 @@ from graderbot.ocr import _BOX_INSET, OcrResult, read_box
 
 EASYOCR_SOURCE = "easyocr"
 GOOGLE_VISION_SOURCE = "google_vision"
+NO_OCR_SOURCE = "no_ocr"
 
 # Answers are plain numbers, so the default stays narrow; broaden it per
 # grading run from the Grade tab (e.g. append "xy" once algebra worksheets
@@ -103,6 +114,21 @@ class MathpixAnswerReader:
 
     def read(self, image: np.ndarray, box: Box) -> OcrResult:
         return read_box(image, box)
+
+
+class NoOcrAnswerReader:
+    """Skips OCR entirely (issue #83) -- see the module docstring for why.
+
+    `grade_hw` only ever calls a reader's `.read()` after its own blank
+    check has already found ink in the box, so this reader doesn't need to
+    look at `image`/`box` at all: it just reports "nothing legible read",
+    which grading scores as wrong (an empty response never parses as a
+    matching answer) and `markup` annotates with the correct answer, exactly
+    like a wrong OCR read would.
+    """
+
+    def read(self, image: np.ndarray, box: Box) -> OcrResult:
+        return OcrResult(text="", raw_text="", confidence=None, source=NO_OCR_SOURCE)
 
 
 class EasyOcrAnswerReader:

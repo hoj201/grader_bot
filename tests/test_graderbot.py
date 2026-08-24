@@ -8,6 +8,7 @@ import fitz
 import numpy as np
 import pytest
 
+from graderbot.answer_reader import NoOcrAnswerReader
 from graderbot.grading import grade_hw, grade_response, is_correct
 from graderbot.imaging import (
     _BORDER_MARGIN_PX,
@@ -472,6 +473,37 @@ def test_grade_hw_reads_a_box_with_ink_normally(monkeypatch):
             answer="12", response="12", correct=True, blank=False, ocr_confidence=0.95, ocr_raw="12"
         )
     }
+
+
+def test_grade_hw_no_ocr_reader_marks_a_filled_box_wrong_without_reading_it(monkeypatch):
+    # issue #83: a filled-in box is marked wrong -- not blank -- so markup
+    # still shows the student the correct answer, but no OCR backend is ever
+    # asked to transcribe the handwriting.
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+    x0, y0, x1, y1 = box_pixel_rect(boxes["q1"], 200, 200)
+    cv2.rectangle(image, (x0 + 2, y0 + 2), (x1 - 2, y1 - 2), (0, 0, 0), -1)
+    monkeypatch.setattr(
+        "graderbot.answer_reader.read_box",
+        lambda image, box: pytest.fail("Mathpix must not be called under NoOcrAnswerReader"),
+    )
+
+    results = grade_hw({"q1": "12"}, boxes, image, answer_reader=NoOcrAnswerReader())
+
+    assert results == {
+        "q1": QuestionResult(
+            answer="12", response="", correct=False, blank=False, ocr_raw="", ocr_source="no_ocr"
+        )
+    }
+
+
+def test_grade_hw_no_ocr_reader_still_detects_a_blank_box(monkeypatch):
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    boxes = {"q1": Box(0.1, 0.5, 0.3, 0.1)}
+
+    results = grade_hw({"q1": "12"}, boxes, image, answer_reader=NoOcrAnswerReader())
+
+    assert results == {"q1": QuestionResult(answer="12", response="", correct=False, blank=True)}
 
 
 class _FakeResponseScorer:
