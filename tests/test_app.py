@@ -12,6 +12,13 @@ from graderbot.answer_reader import EasyOcrAnswerReader, GoogleVisionAnswerReade
 from graderbot.worksheetbot import Question, WorksheetDocument
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
+# AppTest.run() defaults to a hard 3s timeout, which is tuned for a single
+# serial run. Under `-n auto` (pytest-xdist, issue #85) xdist workers compete
+# for CPU, and some AppTest-based tests occasionally exceed that 3s budget
+# under load alone -- not from any real regression in app behavior (issue
+# #87). Give AppTest-based tests more headroom so they aren't flaky under
+# parallel load; a genuine hang still fails, just at a higher bound.
+APP_TEST_TIMEOUT = 15
 
 
 def _seed_worksheet(db_path, title=None, questions_json="[]", public_id=None):
@@ -59,7 +66,7 @@ def test_gallery_tab_renders_seeded_worksheet_without_error(tmp_path, monkeypatc
     _seed_worksheet(db_path)
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -75,7 +82,7 @@ def test_gallery_tab_shows_title_with_prompt_below_it(tmp_path, monkeypatch):
     _seed_worksheet(db_path, title="Linear Equations Practice")
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -103,7 +110,7 @@ def test_gallery_tab_shows_unknown_sty_version_when_hash_missing(tmp_path, monke
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -117,7 +124,7 @@ def test_gallery_tab_shows_empty_state_with_no_worksheets(tmp_path, monkeypatch)
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -130,7 +137,7 @@ def test_grade_tab_renders_without_error(tmp_path, monkeypatch):
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -144,7 +151,7 @@ def test_grade_tab_uploader_accepts_pdf_jpeg_and_png(tmp_path, monkeypatch):
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -166,7 +173,7 @@ def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
     uploader.set_value(("photo.png", b"not-a-real-png", "image/png"))
@@ -185,7 +192,7 @@ def test_create_tab_has_model_selectbox_defaulting_to_haiku(tmp_path, monkeypatc
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -201,7 +208,7 @@ def test_gallery_tab_exposes_questions_json_expander(tmp_path, monkeypatch):
     _seed_worksheet(db_path, questions_json=questions_json)
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -218,7 +225,7 @@ def test_gallery_tab_shows_permanent_download_link(tmp_path, monkeypatch):
     _set_env(monkeypatch, db_path)
     monkeypatch.setenv("BASE_URL", "https://grader-bot.fly.dev")
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -232,7 +239,7 @@ def test_gallery_tab_omits_permanent_link_without_public_id(tmp_path, monkeypatc
     _seed_worksheet(db_path)
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -246,7 +253,7 @@ def test_create_tab_exposes_manual_json_entry(tmp_path, monkeypatch):
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -280,7 +287,7 @@ def test_create_ai_shows_preview_before_compiling(tmp_path, monkeypatch):
 
     monkeypatch.setattr("graderbot.worksheetbot.build_worksheet", fail_if_called)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
         "arithmetic worksheet"
@@ -324,7 +331,7 @@ def test_create_ai_accept_compiles_and_stores(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr("graderbot.worksheetbot.build_worksheet", fake_build)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
         "arithmetic worksheet"
@@ -355,7 +362,7 @@ def test_create_ai_reject_prefills_manual_json_form(tmp_path, monkeypatch):
         lambda *args, **kwargs: _fake_document(),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(ta for ta in at.text_area if ta.label == "Worksheet prompt").set_value(
         "arithmetic worksheet"
@@ -376,7 +383,7 @@ def test_logging_is_configured_with_default_level(tmp_path, monkeypatch):
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -405,7 +412,7 @@ def test_create_from_json_logs_created_worksheet(tmp_path, monkeypatch, caplog):
 
     monkeypatch.setattr("graderbot.worksheetbot.create_worksheet_from_questions", fake_create)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.text_area(key="manual_questions_json").set_value(
         '[{"id": "1", "text": "$2+2=$", "answer": "4"}]'
@@ -432,7 +439,7 @@ def test_delete_worksheet_logs_deletion(tmp_path, monkeypatch, caplog):
     _set_env(monkeypatch, db_path)
     boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="bucket")
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     ask_button = next(b for b in at.button if b.key and b.key.startswith("ask_delete_"))
     ask_button.click().run()
@@ -476,7 +483,7 @@ def test_roster_tab_vectorizes_samples_after_ingest(tmp_path, monkeypatch):
         lambda *args, **kwargs: vectorize_calls.append(kwargs) or 1,
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Scanned PDF" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
@@ -519,7 +526,7 @@ def test_roster_tab_shows_error_when_vectorization_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr("graderbot.embedding.vectorize_samples", raise_vectorize_error)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Scanned PDF" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
@@ -545,7 +552,7 @@ def test_roster_tab_manual_add_student_creates_student(tmp_path, monkeypatch):
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.text_input(key="manual_student_first_name").set_value("Anna")
     at.text_input(key="manual_student_last_name").set_value("Smith")
@@ -570,7 +577,7 @@ def test_roster_tab_manual_add_student_requires_first_and_last_name(tmp_path, mo
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.text_input(key="manual_student_first_name").set_value("Anna")
     at.run()
@@ -594,7 +601,7 @@ def test_roster_tab_csv_import_adds_students_and_reports_skips(tmp_path, monkeyp
 
     csv_bytes = b"first_name,last_name\nAnna,Smith\n,Jones\n"
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if fu.label == "Roster CSV")
     uploader.set_value(("roster.csv", csv_bytes, "text/csv"))
@@ -623,7 +630,7 @@ def test_roster_tab_csv_import_shows_error_for_bad_header(tmp_path, monkeypatch)
 
     csv_bytes = b"name\nAnna Smith\n"
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if fu.label == "Roster CSV")
     uploader.set_value(("roster.csv", csv_bytes, "text/csv"))
@@ -644,7 +651,7 @@ def test_roster_tab_transfer_student_moves_classroom(tmp_path, monkeypatch):
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(b for b in at.button if b.label == "Transfer").click().run()
     next(b for b in at.button if b.label == "Confirm").click().run()
@@ -668,7 +675,7 @@ def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, mon
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(b for b in at.button if b.label == "Transfer").click().run()
     next(b for b in at.button if b.label == "Confirm").click().run()
@@ -709,7 +716,7 @@ def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path
         ),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     button = next(b for b in at.button if b.label == "Evaluate classifier")
     button.click().run()
@@ -785,7 +792,7 @@ def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
         ),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(b for b in at.button if b.label == "Train classifier").click().run()
 
@@ -816,7 +823,7 @@ def test_visualize_tab_train_classifier_surfaces_missing_data(tmp_path, monkeypa
         "graderbot.name_classifier.train_classroom_classifier", raise_no_data
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(b for b in at.button if b.label == "Train classifier").click().run()
 
@@ -831,7 +838,7 @@ def test_grade_tab_defaults_to_ocr_when_no_classifier_is_trained(tmp_path, monke
     _set_env(monkeypatch, db_path)
     _patch_saved_classifier(monkeypatch, exists=False)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -847,7 +854,7 @@ def test_grade_tab_defaults_to_the_classifier_when_one_exists(tmp_path, monkeypa
     _set_env(monkeypatch, db_path)
     _patch_saved_classifier(monkeypatch, exists=True)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -875,7 +882,7 @@ def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatc
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
@@ -904,7 +911,7 @@ def test_grade_tab_errors_rather_than_silently_using_ocr(tmp_path, monkeypatch):
         lambda *args, **kwargs: calls.append(1) or scan_grader.ScanBatchResult(),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
@@ -921,7 +928,7 @@ def test_grade_tab_defaults_to_mathpix_for_answers(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -943,7 +950,7 @@ def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch)
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -970,7 +977,7 @@ def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
     at.text_input(key="grade_easyocr_extra_chars").set_value("xy").run()
@@ -997,7 +1004,7 @@ def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1023,7 +1030,7 @@ def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkey
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
     at.checkbox(key="grade_easyocr_detect_fractions").check().run()
@@ -1047,7 +1054,7 @@ def test_grade_tab_errors_when_easyocr_service_url_is_not_set(tmp_path, monkeypa
         lambda *args, **kwargs: calls.append(1) or scan_grader.ScanBatchResult(),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1074,7 +1081,7 @@ def test_grade_tab_passes_a_google_vision_reader_when_selected(tmp_path, monkeyp
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("Google Cloud Vision").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1098,7 +1105,7 @@ def test_grade_tab_errors_when_google_vision_api_key_is_not_set(tmp_path, monkey
         lambda *args, **kwargs: calls.append(1) or scan_grader.ScanBatchResult(),
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("Google Cloud Vision").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1126,7 +1133,7 @@ def test_grade_tab_passes_a_no_ocr_reader_when_selected(tmp_path, monkeypatch):
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("No OCR (blank detection only)").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1158,7 +1165,7 @@ def test_grade_tab_cnn_verifier_falls_back_to_mathpix_when_no_model_exists(tmp_p
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("CNN verifier (experimental)").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1188,7 +1195,7 @@ def test_grade_tab_cnn_verifier_passes_a_response_scorer_when_model_exists(tmp_p
 
     monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     at.selectbox(key="grade_answer_source").set_value("CNN verifier (experimental)").run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
@@ -1217,7 +1224,7 @@ def test_grade_tab_shows_per_page_names_and_flags_low_confidence(tmp_path, monke
         "graderbot.scan_grader.mark_scan", lambda *args, **kwargs: result
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
@@ -1245,7 +1252,7 @@ def test_app_errors_when_bucket_not_configured(tmp_path, monkeypatch):
     _set_env(monkeypatch, db_path)
     monkeypatch.delenv("S3_BUCKET", raising=False)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -1258,7 +1265,7 @@ def test_dl_query_param_redirects_to_presigned_student_pdf(tmp_path, monkeypatch
     _seed_worksheet(db_path, public_id="ws_a1b2c3d4")
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.query_params["dl"] = "ws_a1b2c3d4"
     at.run()
 
@@ -1277,7 +1284,7 @@ def test_dl_query_param_shows_error_for_unknown_public_id(tmp_path, monkeypatch)
     storage.init_db(db_path).close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.query_params["dl"] = "ws_doesnotexist"
     at.run()
 
@@ -1328,7 +1335,7 @@ def test_dl_query_param_shows_error_when_no_student_pdf(tmp_path, monkeypatch):
     conn.close()
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.query_params["dl"] = "ws_nopdf001"
     at.run()
 
@@ -1340,7 +1347,7 @@ def test_handwriting_data_tab_renders_without_error(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
 
     assert not at.exception
@@ -1367,7 +1374,7 @@ def test_handwriting_data_tab_generates_a_copy_worksheet(tmp_path, monkeypatch):
         "graderbot.handwriting_sample_worksheets.build_handwriting_sample_worksheet", fake_build
     )
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     next(b for b in at.button if b.label == "Generate copy worksheet").click().run()
 
@@ -1402,7 +1409,7 @@ def test_handwriting_data_tab_harvests_scanned_worksheets(tmp_path, monkeypatch)
 
     monkeypatch.setattr("graderbot.handwriting_harvest.harvest_handwriting_labels", fake_harvest)
 
-    at = AppTest.from_file(APP_PATH)
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
     at.run()
     uploader = next(fu for fu in at.get("file_uploader") if "Scanned copy worksheets" in fu.label)
     uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
