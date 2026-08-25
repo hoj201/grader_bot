@@ -825,6 +825,14 @@ def _render_create_from_json() -> None:
     st.rerun()
 
 
+def _marked_pdf_filename(original_name: str) -> str:
+    """Names the marked-up PDF download after the uploaded scan (issue #88):
+    same stem, with `_marked` appended, always a `.pdf` extension -- the
+    marked-up output is always a PDF even when the upload was a JPEG/PNG
+    photo of a scan."""
+    return f"{Path(original_name).stem}_marked.pdf"
+
+
 def _display_results(result) -> dict:
     """Builds the issue-#23 JSON: {student -> {worksheet id -> {question id ->
     {answer, response, correct}}}}."""
@@ -1071,7 +1079,7 @@ def render_grade() -> None:
             st.download_button(
                 "Download marked-up PDF",
                 data=marked_path.read_bytes(),
-                file_name="marked.pdf",
+                file_name=_marked_pdf_filename(uploaded.name),
                 mime="application/pdf",
             )
 
