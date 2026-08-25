@@ -1299,6 +1299,23 @@ def test_build_permanent_download_url_joins_base_and_public_id():
     )
 
 
+def test_marked_pdf_filename_appends_marked_suffix_to_original_stem():
+    # issue #88: the marked-up download should be named after the original
+    # upload, not a fixed "marked.pdf".
+    assert app._marked_pdf_filename("scan.pdf") == "scan_marked.pdf"
+
+
+def test_marked_pdf_filename_always_ends_in_pdf_regardless_of_upload_type():
+    # The marked-up output is always a rendered PDF, even when the upload
+    # was a JPEG/PNG photo of a scan.
+    assert app._marked_pdf_filename("photo.png") == "photo_marked.pdf"
+    assert app._marked_pdf_filename("photo.jpeg") == "photo_marked.pdf"
+
+
+def test_marked_pdf_filename_preserves_only_dots_in_the_stem():
+    assert app._marked_pdf_filename("class.period3.scan.pdf") == "class.period3.scan_marked.pdf"
+
+
 @pytest.mark.slow
 def test_dl_query_param_shows_error_when_no_student_pdf(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
