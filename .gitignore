@@ -569,6 +569,12 @@ TSWLatexianTemp*
 #*Notes.bib
 
 .claude/*
+# ...except the SessionStart hook that provisions Claude Code on the web
+# sessions (latexmk/texlive, tesseract-ocr, poetry install, aruco markers) --
+# that's checked in so future sessions get it automatically.
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/session-start.sh
 
 # worksheet_synth.py latexmk_worksheet() output dirs
 build_cv/
