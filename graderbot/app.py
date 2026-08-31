@@ -833,6 +833,14 @@ def _marked_pdf_filename(original_name: str) -> str:
     return f"{Path(original_name).stem}_marked.pdf"
 
 
+def _ensure_pdf_extension(filename: str) -> str:
+    """Appends a `.pdf` extension to a user-typed output filename if it's
+    missing one (issue #91) -- the combined marked-up output is always a
+    PDF regardless of what the uploaded scans were."""
+    filename = filename.strip()
+    return filename if filename.lower().endswith(".pdf") else f"{filename}.pdf"
+
+
 def _display_results(result) -> dict:
     """Builds the issue-#23 JSON: {student -> {worksheet id -> {question id ->
     {answer, response, correct}}}}."""
@@ -886,12 +894,15 @@ def _display_name_predictions(result) -> None:
 
 def render_grade() -> None:
     st.write(
-        "Upload a PDF, JPEG, or PNG of scanned student work. Each page is "
-        "matched to its worksheet by its QR code, graded against the stored "
-        "answer key, and returned as a marked-up PDF plus per-student results."
+        "Upload one or more PDFs, JPEGs, or PNGs of scanned student work. "
+        "Each page is matched to its worksheet by its QR code, graded "
+        "against the stored answer key, and returned as a single combined "
+        "marked-up PDF plus per-student results."
     )
     uploaded = st.file_uploader(
-        "Student work (PDF, JPEG, or PNG)", type=["pdf", "jpg", "jpeg", "png"]
+        "Student work (PDF, JPEG, or PNG)",
+        type=["pdf", "jpg", "jpeg", "png"],
+        accept_multiple_files=True,
     )
     classroom = _select_classroom("grade_classroom", allow_create=False)
     roster = []
@@ -989,9 +1000,28 @@ def render_grade() -> None:
             "they got right."
         )
 
-    submitted = st.button("Grade", type="primary", disabled=uploaded is None)
+    # Multiple uploads are combined into one marked-up PDF (issue #91), so
+    # there's no single upload name left to derive a download filename
+    # from -- ask for one explicitly instead.
+    output_filename = ""
+    if uploaded and len(uploaded) > 1:
+        output_filename = st.text_input(
+            "Output PDF filename",
+            key="grade_output_filename",
+            help="Multiple files were uploaded, so the combined marked-up "
+            "PDF needs an explicit name instead of one derived from a "
+            "single upload.",
+        )
 
-    if not submitted or uploaded is None:
+    filename_ready = not uploaded or len(uploaded) == 1 or bool(output_filename.strip())
+    submitted = st.button(
+        "Grade", type="primary", disabled=not uploaded or not filename_ready
+    )
+
+    if not submitted or not uploaded:
+        return
+    if len(uploaded) > 1 and not output_filename.strip():
+        st.error("Enter a filename for the combined marked-up PDF.")
         return
 
     name_reader = None
@@ -1040,11 +1070,14 @@ def render_grade() -> None:
             response_scorer = CnnResponseScorer()
 
     with tempfile.TemporaryDirectory() as tmp:
-        scan_suffix = Path(uploaded.name).suffix or ".pdf"
-        scan_path = Path(tmp) / f"scan{scan_suffix}"
-        scan_path.write_bytes(uploaded.getvalue())
+        scan_paths = []
+        for i, scan_file in enumerate(uploaded):
+            scan_suffix = Path(scan_file.name).suffix or ".pdf"
+            scan_path = Path(tmp) / f"scan{i}{scan_suffix}"
+            scan_path.write_bytes(scan_file.getvalue())
+            scan_paths.append(scan_path)
         marked_path = Path(tmp) / "marked.pdf"
-        logger.info("grading scan filename=%s", uploaded.name)
+        logger.info("grading scan filenames=%s", [f.name for f in uploaded])
 
         with st.status("Grading...", expanded=True) as status:
             def on_step(msg: str, detail: str | None = None) -> None:
@@ -1054,7 +1087,7 @@ def render_grade() -> None:
                     st.code(detail, language=None)
 
             result = mark_scan(
-                [scan_path],
+                scan_paths,
                 roster,
                 DB_PATH,
                 marked_path,
@@ -1072,14 +1105,19 @@ def render_grade() -> None:
         )
         _display_name_predictions(result)
         if not graded:
-            st.warning("No pages could be graded from this PDF.")
+            st.warning("No pages could be graded from the uploaded scan(s).")
         else:
             st.success(f"Graded {len(graded)} student(s).")
             st.json(graded)
+            download_name = (
+                _marked_pdf_filename(uploaded[0].name)
+                if len(uploaded) == 1
+                else _ensure_pdf_extension(output_filename)
+            )
             st.download_button(
                 "Download marked-up PDF",
                 data=marked_path.read_bytes(),
-                file_name=_marked_pdf_filename(uploaded.name),
+                file_name=download_name,
                 mime="application/pdf",
             )
 

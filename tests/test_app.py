@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest
 
 from graderbot import app, name_classifier, scan_grader, storage
 from graderbot.answer_reader import EasyOcrAnswerReader, GoogleVisionAnswerReader, NoOcrAnswerReader
+from graderbot.models import QuestionResult
 from graderbot.worksheetbot import Question, WorksheetDocument
 
 APP_PATH = str(Path(__file__).resolve().parent.parent / "graderbot" / "app.py")
@@ -184,6 +185,136 @@ def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
     assert not at.exception
     assert len(seen_paths) == 1
     assert seen_paths[0].endswith(".png")
+
+
+@pytest.mark.slow
+def test_grade_tab_uploader_accepts_multiple_files(tmp_path, monkeypatch):
+    # issue #91: the grade tab should accept a batch of scans, not just one.
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.run()
+
+    assert not at.exception
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    assert uploader.accept_multiple_files is True
+
+
+@pytest.mark.slow
+def test_grade_tab_passes_every_uploaded_scan_to_mark_scan(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    seen_paths = []
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+        seen_paths.extend(str(p) for p in hws)
+        return scan_grader.ScanBatchResult()
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(
+        [
+            ("scan1.pdf", b"not-a-real-pdf", "application/pdf"),
+            ("scan2.png", b"not-a-real-png", "image/png"),
+        ]
+    )
+    at.run()
+    at.text_input(key="grade_output_filename").set_value("combined").run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert len(seen_paths) == 2
+    assert seen_paths[0].endswith(".pdf")
+    assert seen_paths[1].endswith(".png")
+
+
+@pytest.mark.slow
+def test_grade_tab_no_output_filename_box_for_a_single_upload(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
+    at.run()
+
+    assert not at.exception
+    assert not any(ti.key == "grade_output_filename" for ti in at.text_input)
+
+
+@pytest.mark.slow
+def test_grade_tab_disables_grade_button_until_an_output_filename_is_given(tmp_path, monkeypatch):
+    # issue #91: grading multiple scans combines them into one PDF, so the
+    # Grade button must stay disabled until an output filename is given --
+    # matching the issue's request that a filename be "demanded".
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(
+        [
+            ("scan1.pdf", b"not-a-real-pdf", "application/pdf"),
+            ("scan2.pdf", b"not-a-real-pdf", "application/pdf"),
+        ]
+    )
+    at.run()
+    grade_button = next(b for b in at.button if b.label == "Grade")
+    assert grade_button.proto.disabled is True
+
+    at.text_input(key="grade_output_filename").set_value("period3_batch").run()
+    grade_button = next(b for b in at.button if b.label == "Grade")
+    assert grade_button.proto.disabled is False
+
+
+@pytest.mark.slow
+def test_grade_tab_download_uses_the_typed_filename_for_multiple_uploads(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    storage.init_db(db_path).close()
+    _set_env(monkeypatch, db_path)
+
+    result = scan_grader.ScanBatchResult(
+        results_by_worksheet={
+            "ws_1": {
+                "Anna Smith": {
+                    "add001": QuestionResult(answer="12", response="12", correct=True)
+                }
+            }
+        }
+    )
+
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+        Path(out_path).write_bytes(b"%PDF-fake")
+        return result
+
+    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.run()
+    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
+    uploader.set_value(
+        [
+            ("scan1.pdf", b"not-a-real-pdf", "application/pdf"),
+            ("scan2.pdf", b"not-a-real-pdf", "application/pdf"),
+        ]
+    )
+    at.run()
+    at.text_input(key="grade_output_filename").set_value("period3_batch").run()
+    next(b for b in at.button if b.label == "Grade").click().run()
+
+    assert not at.exception
+    assert any(d.label == "Download marked-up PDF" for d in at.get("download_button"))
 
 
 @pytest.mark.slow
@@ -1314,6 +1445,24 @@ def test_marked_pdf_filename_always_ends_in_pdf_regardless_of_upload_type():
 
 def test_marked_pdf_filename_preserves_only_dots_in_the_stem():
     assert app._marked_pdf_filename("class.period3.scan.pdf") == "class.period3.scan_marked.pdf"
+
+
+def test_ensure_pdf_extension_appends_suffix_when_missing():
+    # issue #91: a user-typed output filename for a combined multi-upload
+    # grade run should still end up a .pdf.
+    assert app._ensure_pdf_extension("combined") == "combined.pdf"
+
+
+def test_ensure_pdf_extension_leaves_existing_pdf_suffix_alone():
+    assert app._ensure_pdf_extension("combined.pdf") == "combined.pdf"
+
+
+def test_ensure_pdf_extension_is_case_insensitive_about_existing_suffix():
+    assert app._ensure_pdf_extension("combined.PDF") == "combined.PDF"
+
+
+def test_ensure_pdf_extension_strips_surrounding_whitespace():
+    assert app._ensure_pdf_extension("  combined  ") == "combined.pdf"
 
 
 @pytest.mark.slow
