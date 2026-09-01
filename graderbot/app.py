@@ -13,6 +13,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -1095,6 +1096,8 @@ def render_grade() -> None:
                 name_reader=name_reader,
                 answer_reader=answer_reader,
                 response_scorer=response_scorer,
+                classroom_id=classroom.id if classroom is not None else None,
+                bucket=BUCKET,
             )
             status.update(label="Grading complete", state="complete")
 
@@ -1172,6 +1175,126 @@ def render_name_sheets() -> None:
         file_name="name_worksheets.pdf",
         mime="application/pdf",
     )
+
+
+def render_label_names() -> None:
+    """Part 1 of issue #92's manual-labelling tab: grading sometimes reads a
+    student's name with low or no confidence (see
+    `pending_name_capture.maybe_capture_pending_name_label`, wired into
+    `render_grade`'s `mark_scan` call); those name-box crops land in a
+    per-classroom queue here for a quick manual check. Confirming one adds
+    it straight to the handwriting classifier's training data (the same
+    NAME_IMAGES table `ingest_name_sheets` writes to) and embeds it
+    immediately, so it's ready to use the next time the Visualize tab
+    retrains. Tasks are served one at a time, chosen uniformly at random,
+    per the issue's "for the moment" scope.
+    """
+    st.write(
+        "Grading a scan sometimes reads a student's name with low or no "
+        "confidence; those name-box crops are queued here for a quick "
+        "manual check. Confirming one adds it straight to the handwriting "
+        "classifier's training data -- retrain on the Visualize tab "
+        "afterwards to put it to use."
+    )
+    classroom = _select_classroom("label_names_classroom", allow_create=False)
+    if classroom is None:
+        return
+
+    conn = storage.init_db(DB_PATH)
+    try:
+        students = storage.list_students(conn, classroom.id)
+        pending_count = storage.count_pending_name_labels(conn, classroom.id)
+    finally:
+        conn.close()
+
+    st.caption(f"{pending_count} crop(s) awaiting review for {classroom.label}.")
+    if not students:
+        st.info("No students in this class yet.")
+        return
+
+    # Stash the crop currently on screen in session_state, keyed by
+    # classroom, so it survives the rerun every widget interaction triggers
+    # within this run (same pattern as ai_preview in _render_create_ai) --
+    # otherwise a fresh random pick on every rerun would swap out the crop
+    # from under the selectbox/buttons below.
+    state_key = f"label_names_pending_{classroom.id}"
+    if state_key not in st.session_state:
+        conn = storage.init_db(DB_PATH)
+        try:
+            st.session_state[state_key] = storage.random_pending_name_label(conn, classroom.id)
+        finally:
+            conn.close()
+
+    pending = st.session_state[state_key]
+    if pending is None:
+        st.success("No crops waiting for review right now.")
+        return
+
+    bucket_name, key = storage.parse_s3_url(pending.image_s3url)
+    image_bytes = storage._default_s3_client().get_object(
+        Bucket=bucket_name, Key=key
+    )["Body"].read()
+    caption = (
+        f"Best guess: {pending.predicted_name} ({pending.source}, {pending.confidence:.0%})"
+        if pending.predicted_name
+        else "No name could be read"
+    )
+    st.image(image_bytes, caption=caption, width=300)
+
+    unknown_option = "(not sure / discard)"
+    options = [unknown_option] + [f"{s.first_name} {s.last_name}".strip() for s in students]
+    default_index = options.index(pending.predicted_name) if pending.predicted_name in options else 0
+    choice = st.selectbox(
+        "Who wrote this?", options, index=default_index, key=f"label_names_choice_{pending.id}"
+    )
+
+    assign_col, discard_col, skip_col = st.columns(3)
+    if assign_col.button(
+        "Assign",
+        type="primary",
+        key=f"label_names_assign_{pending.id}",
+        disabled=choice == unknown_option,
+    ):
+        student = next(s for s in students if f"{s.first_name} {s.last_name}".strip() == choice)
+        conn = storage.init_db(DB_PATH)
+        try:
+            storage.insert_name_image(
+                conn,
+                storage.NameImageRecord(
+                    student_id=student.id,
+                    box_id=pending.box_id,
+                    image_s3url=pending.image_s3url,
+                    image_sha256=pending.image_sha256,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            storage.delete_pending_name_label(conn, pending.id)
+        finally:
+            conn.close()
+        try:
+            embedding.vectorize_samples(DB_PATH, bucket=BUCKET)
+        except Exception:  # noqa: BLE001 - labeling must survive an embedding hiccup
+            logger.warning("failed to vectorize newly-labeled name image", exc_info=True)
+        logger.info(
+            "labeled pending name crop id=%s classroom=%s student=%s",
+            pending.id, classroom.id, student.id,
+        )
+        st.session_state.pop(state_key, None)
+        st.rerun()
+
+    if discard_col.button("Discard", key=f"label_names_discard_{pending.id}"):
+        conn = storage.init_db(DB_PATH)
+        try:
+            storage.delete_pending_name_label(conn, pending.id)
+        finally:
+            conn.close()
+        logger.info("discarded pending name crop id=%s classroom=%s", pending.id, classroom.id)
+        st.session_state.pop(state_key, None)
+        st.rerun()
+
+    if skip_col.button("Skip for now", key=f"label_names_skip_{pending.id}"):
+        st.session_state.pop(state_key, None)
+        st.rerun()
 
 
 def render_handwriting_data() -> None:
@@ -1312,9 +1435,13 @@ def main() -> None:
         names_tab,
         roster_tab,
         visualize_tab,
+        label_names_tab,
         handwriting_data_tab,
     ) = st.tabs(
-        ["Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize", "Handwriting Data"]
+        [
+            "Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize",
+            "Label Names", "Handwriting Data",
+        ]
     )
     with gallery_tab:
         render_gallery()
@@ -1328,6 +1455,8 @@ def main() -> None:
         render_roster()
     with visualize_tab:
         render_visualize()
+    with label_names_tab:
+        render_label_names()
     with handwriting_data_tab:
         render_handwriting_data()
 
