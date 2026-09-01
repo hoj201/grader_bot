@@ -49,15 +49,17 @@ configured, the worksheet is still compiled but nothing is uploaded or
 stored.
 
 ### Schema (ERD)
-All six tables live in the one SQLite DB created by `init_db` (`storage.py`).
-`CLASSROOM`/`STUDENT`/`NAME_IMAGES`/`NAME_EMBEDDINGS` form the roster/name-classifier
-chain (issues #2/#43/#46); `WORKSHEET`, `STY_VERSION`, and `MATHPIX_CALL` are
-standalone. The `WORKSHEET.sty_hash -> STY_VERSION.hash` link is a convention
-followed in code (`record_sty_version`), not a SQLite `FOREIGN KEY` constraint.
+All the tables live in the one SQLite DB created by `init_db` (`storage.py`).
+`CLASSROOM`/`STUDENT`/`NAME_IMAGES`/`NAME_EMBEDDINGS`/`PENDING_NAME_LABEL` form
+the roster/name-classifier chain (issues #2/#43/#46/#92); `WORKSHEET`,
+`STY_VERSION`, `MATHPIX_CALL`, and `HANDWRITING_LABEL` are standalone. The
+`WORKSHEET.sty_hash -> STY_VERSION.hash` link is a convention followed in code
+(`record_sty_version`), not a SQLite `FOREIGN KEY` constraint.
 
 ```mermaid
 erDiagram
     CLASSROOM ||--o{ STUDENT : enrolls
+    CLASSROOM ||--o{ PENDING_NAME_LABEL : "queues crops for"
     STUDENT ||--o{ NAME_IMAGES : "has samples"
     STUDENT ||--o{ NAME_EMBEDDINGS : "has embeddings"
     NAME_IMAGES ||--o| NAME_EMBEDDINGS : "embedded as"
@@ -89,6 +91,17 @@ erDiagram
         int student_id FK
         int name_image_id FK "UNIQUE"
         string embedding_s3url
+        string created_at
+    }
+    PENDING_NAME_LABEL {
+        int id PK
+        int classroom_id FK
+        string box_id
+        string image_s3url
+        string image_sha256
+        string predicted_name
+        float confidence
+        string source
         string created_at
     }
     WORKSHEET {
@@ -393,7 +406,15 @@ end to end through the Streamlit app:
 4. **Grade** tab — the "Read student names with" dropdown picks between the
    trained classifier and OCR for that run, and the results table shows which
    name was read off each page and how confident the reader was, so a doubtful
-   read can be checked by hand (issue #58).
+   read can be checked by hand (issue #58). Every page whose name-read
+   confidence falls below `pending_name_capture.LOW_CONFIDENCE_THRESHOLD`
+   (0.5) has its name-box crop queued for the **Label Names** tab below
+   (issue #92), instead of that read simply going unchecked.
+5. **Label Names** tab — works through that queue one crop at a time (chosen
+   uniformly at random), showing the reader's own guess as a hint. Assigning
+   the right student inserts a `NAME_IMAGES` row and immediately embeds it
+   (same as step 2), so it's ready the next time step 3 retrains; "Discard"
+   drops an unusable crop instead.
 
 `vectorize_samples` (see [embedding.py](./graderbot/embedding.py)) chooses its
 embedder from the `NAME_EMBEDDER` env var:
@@ -418,7 +439,7 @@ without re-ingesting silently shrinks the training set rather than mixing
 incompatible vectors.
 
 ## Web frontend
-[app.py](./graderbot/app.py) is a Streamlit app with six tabs: **Gallery**, to browse
+[app.py](./graderbot/app.py) is a Streamlit app with eight tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
 presigned S3 links; **Create**, to generate a new worksheet from a
 prompt (runs the same pipeline as `graderbot.worksheetbot`, including S3 upload +
@@ -426,9 +447,12 @@ DB storage); **Grade**, to upload a PDF of scanned student work and have
 it auto-graded; **Name sheets**, to paste a class roster (one name per line)
 and download a printable PDF of name-collection worksheets — one page per
 student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45);
-**Roster**, to ingest those sheets back in and manage a class's students; and
+**Roster**, to ingest those sheets back in and manage a class's students;
 **Visualize**, to inspect, cross-validate, and train the handwriting name
-classifier (see above). Each graded page's QR code is matched to its stored
+classifier (see above); **Label Names**, to manually assign a student to the
+low/no-confidence name crops grading queues up (issue #92, see above); and
+**Handwriting Data**, to generate/harvest copy worksheets for the CNN
+response-verifier's training set (issue #81, see above). Each graded page's QR code is matched to its stored
 worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
 as per-student JSON results and as a single marked-up PDF (correct answers

@@ -13,10 +13,13 @@ from graderbot.storage import (
     HandwritingLabelRecord,
     NameEmbeddingRecord,
     NameImageRecord,
+    PendingNameLabelRecord,
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
+    count_pending_name_labels,
     delete_from_s3,
+    delete_pending_name_label,
     delete_student,
     delete_worksheet,
     deserialize_boxes,
@@ -34,6 +37,7 @@ from graderbot.storage import (
     insert_mathpix_call,
     insert_name_embedding,
     insert_name_image,
+    insert_pending_name_label,
     insert_worksheet,
     list_classrooms,
     list_handwriting_labels,
@@ -43,6 +47,8 @@ from graderbot.storage import (
     list_worksheets,
     name_image_exists,
     parse_s3_url,
+    pending_name_label_exists,
+    random_pending_name_label,
     record_sty_version,
     serialize_boxes,
     slugify_title,
@@ -1171,6 +1177,101 @@ def test_list_unembedded_name_images_excludes_embedded(tmp_path):
     )
 
     assert list_unembedded_name_images(conn) == []
+
+
+# --------------------------------------------------------------------------
+# PENDING_NAME_LABEL (issue #92)
+# --------------------------------------------------------------------------
+
+def test_init_db_creates_pending_name_label_table(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(PENDING_NAME_LABEL)")}
+
+    assert columns == {
+        "id",
+        "classroom_id",
+        "box_id",
+        "image_s3url",
+        "image_sha256",
+        "predicted_name",
+        "confidence",
+        "source",
+        "created_at",
+    }
+
+
+def test_insert_pending_name_label_and_exists(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+
+    assert not pending_name_label_exists(conn, "sha_pending")
+
+    record = PendingNameLabelRecord(
+        classroom_id=classroom.id,
+        image_s3url="https://bucket.s3.amazonaws.com/pending_name_labels/1/sha_pending.png",
+        image_sha256="sha_pending",
+        predicted_name="Alice Smith",
+        confidence=0.33,
+        source="classifier",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    new_id = insert_pending_name_label(conn, record)
+
+    assert pending_name_label_exists(conn, "sha_pending")
+    assert count_pending_name_labels(conn, classroom.id) == 1
+
+    fetched = random_pending_name_label(conn, classroom.id)
+    assert fetched.id == new_id
+    assert fetched.predicted_name == "Alice Smith"
+    assert fetched.confidence == pytest.approx(0.33)
+    assert fetched.source == "classifier"
+    assert fetched.box_id == "name"
+
+
+def test_count_and_random_pending_name_label_scoped_to_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=room_a.id,
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_a",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert count_pending_name_labels(conn, room_a.id) == 1
+    assert count_pending_name_labels(conn, room_b.id) == 0
+    assert random_pending_name_label(conn, room_b.id) is None
+
+
+def test_random_pending_name_label_returns_none_when_empty(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+
+    assert random_pending_name_label(conn, classroom.id) is None
+
+
+def test_delete_pending_name_label_removes_row(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    pending_id = insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=classroom.id,
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_a",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    delete_pending_name_label(conn, pending_id)
+
+    assert count_pending_name_labels(conn, classroom.id) == 0
+    assert not pending_name_label_exists(conn, "sha_a")
 
 
 def test_insert_handwriting_label_and_exists(tmp_path):

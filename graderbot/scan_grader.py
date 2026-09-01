@@ -27,9 +27,11 @@ import numpy as np
 
 from graderbot.answer_reader import AnswerReader
 from graderbot.grading import grade_hw
-from graderbot.imaging import load_scan_pages
+from graderbot.imaging import _crop_box, load_scan_pages
 from graderbot.models import Box, QuestionResult
 from graderbot.name_reader import NameGuess, NameReader, OcrNameReader
+from graderbot.ocr import _BOX_INSET
+from graderbot.pending_name_capture import maybe_capture_pending_name_label
 from graderbot.registration import read_worksheet_id, rectify_to_canonical
 from graderbot.markup import render_marked_page
 from graderbot.response_scorer import ResponseScorer
@@ -108,6 +110,9 @@ def _grade_batch(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
+    classroom_id: Optional[int] = None,
+    bucket: Optional[str] = None,
+    s3_client=None,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
     """Shared core of `grade_scans`/`mark_scan`: rectifies every scan page to the
     canonical frame, groups pages by decoded worksheet id, and grades each group
@@ -127,6 +132,15 @@ def _grade_batch(
     `response_scorer` (issue #81) verifies plain-numeric answers against
     candidates instead of transcribing them; see `grade_hw` for how it and
     `answer_reader` split the work.
+
+    `classroom_id` and `bucket` opt into capturing low/no-confidence name-box
+    crops for the "Label names" tab's manual-labelling queue (issue #92):
+    when both are set, every page whose name-read confidence is below
+    `pending_name_capture.LOW_CONFIDENCE_THRESHOLD` has its name-box crop
+    queued as a PENDING_NAME_LABEL row (capture is non-fatal and self-gating
+    -- see `maybe_capture_pending_name_label`). Neither is required for
+    grading itself; leaving `classroom_id` unset (the default) disables
+    capture entirely.
 
     `on_step(msg, detail)` receives per-page progress, separating the two ways a
     page becomes "unreadable" -- rectification (ArUco markers not found) versus
@@ -209,6 +223,18 @@ def _grade_batch(
                     source=guess.source,
                 )
             )
+            if classroom_id is not None and name_box is not None:
+                crop = _crop_box(image, name_box, _BOX_INSET)
+                maybe_capture_pending_name_label(
+                    conn,
+                    crop,
+                    classroom_id,
+                    guess.name,
+                    guess.confidence,
+                    guess.source,
+                    bucket=bucket,
+                    s3_client=s3_client,
+                )
             graded_scans.append(
                 _GradedScan(
                     worksheet_id,
@@ -243,13 +269,18 @@ def grade_scans(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
+    classroom_id: Optional[int] = None,
+    bucket: Optional[str] = None,
+    s3_client=None,
 ) -> ScanBatchResult:
     """Grades each scan in `hws` against the worksheet its QR code identifies,
     fetched from the database at `db_path`. Student names are resolved against
     `roster` by OCR unless `name_reader` overrides that; answer boxes are read
     by Mathpix unless `answer_reader` overrides that (see `_grade_batch`).
     `response_scorer` optionally verifies plain-numeric answers instead
-    (issue #81, see `grade_hw`). `on_step` streams per-page progress. See
+    (issue #81, see `grade_hw`). `classroom_id`/`bucket` optionally capture
+    low/no-confidence name-box crops for manual labelling (issue #92, see
+    `_grade_batch`). `on_step` streams per-page progress. See
     `ScanBatchResult` for the return shape."""
     conn = init_db(Path(db_path))
     try:
@@ -261,6 +292,9 @@ def grade_scans(
             name_reader=name_reader,
             answer_reader=answer_reader,
             response_scorer=response_scorer,
+            classroom_id=classroom_id,
+            bucket=bucket,
+            s3_client=s3_client,
         )
         return result
     finally:
@@ -291,6 +325,9 @@ def mark_scan(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
+    classroom_id: Optional[int] = None,
+    bucket: Optional[str] = None,
+    s3_client=None,
 ) -> ScanBatchResult:
     """Grades `hws` exactly like `grade_scans` and, in addition, writes a single
     combined marked-up PDF to `out_path` -- one page per successfully graded
@@ -308,6 +345,9 @@ def mark_scan(
             name_reader=name_reader,
             answer_reader=answer_reader,
             response_scorer=response_scorer,
+            classroom_id=classroom_id,
+            bucket=bucket,
+            s3_client=s3_client,
         )
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")

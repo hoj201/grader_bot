@@ -168,7 +168,7 @@ def test_grade_tab_writes_uploaded_png_with_png_suffix(tmp_path, monkeypatch):
 
     seen_paths = []
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen_paths.extend(str(p) for p in hws)
         return scan_grader.ScanBatchResult()
 
@@ -210,7 +210,7 @@ def test_grade_tab_passes_every_uploaded_scan_to_mark_scan(tmp_path, monkeypatch
 
     seen_paths = []
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen_paths.extend(str(p) for p in hws)
         return scan_grader.ScanBatchResult()
 
@@ -294,7 +294,7 @@ def test_grade_tab_download_uses_the_typed_filename_for_multiple_uploads(tmp_pat
         }
     )
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         Path(out_path).write_bytes(b"%PDF-fake")
         return result
 
@@ -1007,7 +1007,7 @@ def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatc
     )
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["name_reader"] = name_reader
         return scan_grader.ScanBatchResult()
 
@@ -1075,7 +1075,7 @@ def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch)
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1102,7 +1102,7 @@ def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1129,7 +1129,7 @@ def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1155,7 +1155,7 @@ def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkey
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1206,7 +1206,7 @@ def test_grade_tab_passes_a_google_vision_reader_when_selected(tmp_path, monkeyp
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1258,7 +1258,7 @@ def test_grade_tab_passes_a_no_ocr_reader_when_selected(tmp_path, monkeypatch):
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         return scan_grader.ScanBatchResult()
 
@@ -1289,7 +1289,7 @@ def test_grade_tab_cnn_verifier_falls_back_to_mathpix_when_no_model_exists(tmp_p
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["answer_reader"] = answer_reader
         seen["response_scorer"] = response_scorer
         return scan_grader.ScanBatchResult()
@@ -1320,7 +1320,7 @@ def test_grade_tab_cnn_verifier_passes_a_response_scorer_when_model_exists(tmp_p
 
     seen = {}
 
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None):
+    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
         seen["response_scorer"] = response_scorer
         return scan_grader.ScanBatchResult()
 

@@ -103,6 +103,28 @@ class NameEmbeddingRecord:
 
 
 @dataclass
+class PendingNameLabelRecord:
+    """One low/no-confidence name-box crop captured during grading (issue
+    #92), waiting for a human to say which student actually wrote it. Lets
+    the "Label names" tab draw a random unresolved crop, show the reader's
+    own guess (`predicted_name`/`confidence`/`source`) as a hint, and turn a
+    confirmed answer straight into a `NameImageRecord` -- the same training
+    data `ingest_name_sheets` produces, just sourced from real graded scans
+    instead of dedicated name-collection sheets. A row is deleted once
+    resolved (assigned or discarded), so this table only ever holds the
+    current queue, not a permanent history."""
+    classroom_id: int
+    image_s3url: str
+    image_sha256: str
+    box_id: str = "name"
+    predicted_name: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Optional[str] = None
+    created_at: Optional[str] = None
+    id: Optional[int] = None
+
+
+@dataclass
 class HandwritingLabelRecord:
     """One human-confirmed (crop, text) pair for training/evaluating
     `response_scorer.CnnResponseScorer` (issue #81) -- the "dedicated
@@ -233,6 +255,25 @@ def init_db(db_path: Path) -> Connection:
             student_id INTEGER NOT NULL REFERENCES STUDENT(id),
             name_image_id INTEGER NOT NULL UNIQUE REFERENCES NAME_IMAGES(id),
             embedding_s3url TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    # A low/no-confidence name-box crop captured during grading (issue #92),
+    # queued for a human to assign to the right student in the "Label names"
+    # tab. Deleted once resolved (assigned or discarded) -- this table only
+    # ever holds the current queue.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS PENDING_NAME_LABEL (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            classroom_id INTEGER NOT NULL REFERENCES CLASSROOM(id),
+            box_id TEXT,
+            image_s3url TEXT,
+            image_sha256 TEXT,
+            predicted_name TEXT,
+            confidence REAL,
+            source TEXT,
             created_at TEXT
         )
         """
@@ -605,6 +646,95 @@ def insert_name_embedding(conn: Connection, record: NameEmbeddingRecord) -> int:
     )
     conn.commit()
     return cursor.lastrowid
+
+
+def insert_pending_name_label(conn: Connection, record: PendingNameLabelRecord) -> int:
+    """Queues one low/no-confidence name-box crop from grading (issue #92)
+    and returns the new row id."""
+    cursor = conn.execute(
+        """
+        INSERT INTO PENDING_NAME_LABEL
+            (classroom_id, box_id, image_s3url, image_sha256, predicted_name,
+             confidence, source, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.classroom_id,
+            record.box_id,
+            record.image_s3url,
+            record.image_sha256,
+            record.predicted_name,
+            record.confidence,
+            record.source,
+            record.created_at,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def pending_name_label_exists(conn: Connection, image_sha256: str) -> bool:
+    """True if this crop is already queued (same content hash) -- lets
+    capture skip re-queuing a crop across repeated grading runs of the same
+    scan, mirroring `name_image_exists`."""
+    row = conn.execute(
+        "SELECT 1 FROM PENDING_NAME_LABEL WHERE image_sha256 = ? LIMIT 1",
+        (image_sha256,),
+    ).fetchone()
+    return row is not None
+
+
+_PENDING_NAME_LABEL_COLUMNS = (
+    "id", "classroom_id", "box_id", "image_s3url", "image_sha256",
+    "predicted_name", "confidence", "source", "created_at",
+)
+
+
+def _row_to_pending_name_label(row) -> PendingNameLabelRecord:
+    return PendingNameLabelRecord(
+        id=row[0],
+        classroom_id=row[1],
+        box_id=row[2],
+        image_s3url=row[3],
+        image_sha256=row[4],
+        predicted_name=row[5],
+        confidence=row[6],
+        source=row[7],
+        created_at=row[8],
+    )
+
+
+def count_pending_name_labels(conn: Connection, classroom_id: int) -> int:
+    """How many crops are still queued for this classroom -- shown in the
+    "Label names" tab so a teacher can see whether the queue is worth
+    working through."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM PENDING_NAME_LABEL WHERE classroom_id = ?",
+        (classroom_id,),
+    ).fetchone()
+    return row[0]
+
+
+def random_pending_name_label(
+    conn: Connection, classroom_id: int
+) -> Optional[PendingNameLabelRecord]:
+    """One pending crop for this classroom, chosen uniformly at random
+    (issue #92: "for the moment, you can just request the label tasks
+    uniformly at random"), or `None` if the queue is empty."""
+    row = conn.execute(
+        f"""
+        SELECT {', '.join(_PENDING_NAME_LABEL_COLUMNS)} FROM PENDING_NAME_LABEL
+        WHERE classroom_id = ? ORDER BY RANDOM() LIMIT 1
+        """,
+        (classroom_id,),
+    ).fetchone()
+    return _row_to_pending_name_label(row) if row is not None else None
+
+
+def delete_pending_name_label(conn: Connection, pending_id: int) -> None:
+    """Removes a resolved (assigned or discarded) crop from the queue."""
+    conn.execute("DELETE FROM PENDING_NAME_LABEL WHERE id = ?", (pending_id,))
+    conn.commit()
 
 
 def insert_handwriting_label(conn: Connection, record: HandwritingLabelRecord) -> int:
