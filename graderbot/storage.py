@@ -986,25 +986,36 @@ def delete_from_s3(bucket: str, key: str, s3_client=None) -> None:
 # PDF generation
 # --------------------------------------------------------------------------
 
-def images_to_pdf(images: Iterable[np.ndarray], out_path: Path) -> Path:
+def images_to_pdf(
+    images: Iterable[np.ndarray], out_path: Path, jpeg_quality: int = 85
+) -> Path:
     """Writes one or more BGR images as a single (multi-page) PDF, one page per
     image, in order.
 
-    `images` may be any iterable, including a generator -- each image is PNG-
-    encoded and inserted into the output document as it's produced, so at most
-    one raw (uncompressed) page is ever resident at a time; everything already
-    written sits in the PDF as compressed page data. The previous
-    implementation (PIL's multi-page save) needed every page's full-resolution
-    RGB array converted and held in one `append_images` list simultaneously,
-    which could exceed the 1GB fly.io VM's memory on a big batch of scans."""
+    `images` may be any iterable, including a generator -- each image is
+    JPEG-encoded and inserted into the output document as it's produced, so
+    at most one raw (uncompressed) page is ever resident at a time.
+
+    The encoding has to be JPEG specifically: PyMuPDF's `insert_image` can
+    only embed a JPEG stream as-is (as a PDF `DCTDecode` image). Anything
+    else -- including PNG -- it fully decodes back to a raw bitmap first and
+    embeds *that*, uncompressed, regardless of how small the source encoding
+    was. A 1275x1650 canonical page, PNG-encoded to ~50KB, still landed in
+    the PDF at ~6.3MB (its exact raw RGB size) -- so a big multi-page batch
+    blew memory even after switching from Pillow's `append_images` (which
+    needed every page's full-resolution array resident at once) to this
+    one-page-at-a-time approach, just at a bigger multiple. JPEG at
+    `jpeg_quality` instead lands in the PDF at roughly its encoded size
+    (tens of KB for a typical worksheet page), which is what actually keeps
+    a many-page batch off the 1GB fly.io VM's memory ceiling."""
     doc = fitz.open()
     try:
         wrote_a_page = False
         for img in images:
             height, width = img.shape[:2]
-            ok, buf = cv2.imencode(".png", img)
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
             if not ok:
-                raise ValueError("failed to PNG-encode an image for images_to_pdf")
+                raise ValueError("failed to JPEG-encode an image for images_to_pdf")
             page = doc.new_page(width=width, height=height)
             page.insert_image(page.rect, stream=buf.tobytes())
             wrote_a_page = True
