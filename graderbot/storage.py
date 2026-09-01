@@ -15,14 +15,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlite3 import Connection, connect
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import boto3
 import cv2
+import fitz
 import numpy as np
-from PIL import Image
 
 from graderbot.models import Box
 from graderbot.worksheet_boxes import extract_answer_boxes
@@ -856,13 +856,33 @@ def delete_from_s3(bucket: str, key: str, s3_client=None) -> None:
 # PDF generation
 # --------------------------------------------------------------------------
 
-def images_to_pdf(images: List[np.ndarray], out_path: Path) -> Path:
+def images_to_pdf(images: Iterable[np.ndarray], out_path: Path) -> Path:
     """Writes one or more BGR images as a single (multi-page) PDF, one page per
-    image, in order."""
-    if not images:
-        raise ValueError("images_to_pdf requires at least one image")
-    pages = [Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)) for img in images]
-    pages[0].save(out_path, "PDF", save_all=True, append_images=pages[1:])
+    image, in order.
+
+    `images` may be any iterable, including a generator -- each image is PNG-
+    encoded and inserted into the output document as it's produced, so at most
+    one raw (uncompressed) page is ever resident at a time; everything already
+    written sits in the PDF as compressed page data. The previous
+    implementation (PIL's multi-page save) needed every page's full-resolution
+    RGB array converted and held in one `append_images` list simultaneously,
+    which could exceed the 1GB fly.io VM's memory on a big batch of scans."""
+    doc = fitz.open()
+    try:
+        wrote_a_page = False
+        for img in images:
+            height, width = img.shape[:2]
+            ok, buf = cv2.imencode(".png", img)
+            if not ok:
+                raise ValueError("failed to PNG-encode an image for images_to_pdf")
+            page = doc.new_page(width=width, height=height)
+            page.insert_image(page.rect, stream=buf.tobytes())
+            wrote_a_page = True
+        if not wrote_a_page:
+            raise ValueError("images_to_pdf requires at least one image")
+        doc.save(out_path)
+    finally:
+        doc.close()
     return out_path
 
 

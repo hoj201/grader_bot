@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from sqlite3 import Connection
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -267,6 +267,21 @@ def grade_scans(
         conn.close()
 
 
+def _marked_pages(graded: List["_GradedScan"]) -> Iterator[np.ndarray]:
+    """Yields each graded scan's marked-up page as a BGR image, one at a time,
+    in scan order -- and drops the scan's rectified image the moment its
+    marked-up copy exists, rather than after the whole batch is rendered.
+    Meant to be consumed lazily (e.g. by `images_to_pdf`) so only one page's
+    raw pixels are alive at once instead of the full batch."""
+    for scan in graded:
+        marked_bgr = cv2.cvtColor(
+            render_marked_page(scan.image, scan.results, scan.question_boxes),
+            cv2.COLOR_RGB2BGR,
+        )
+        scan.image = None
+        yield marked_bgr
+
+
 def mark_scan(
     hws: List[Union[str, Path]],
     roster: List[str],
@@ -296,22 +311,17 @@ def mark_scan(
         )
         if graded:
             on_step(f"Rendering marked-up PDF ({len(graded)} page(s))...")
-            # Build the marked-up pages one scan at a time and drop each
-            # scan's rectified image as soon as its marked-up copy exists,
-            # instead of holding a full rectified image *and* a full
-            # marked-up image for every page in the batch at once. A large
-            # multi-page scan otherwise doubles its peak image memory here,
-            # which is tight on the 1GB fly.io VM this runs on.
-            marked_bgr = []
-            for scan in graded:
-                marked_bgr.append(
-                    cv2.cvtColor(
-                        render_marked_page(scan.image, scan.results, scan.question_boxes),
-                        cv2.COLOR_RGB2BGR,
-                    )
-                )
-                scan.image = None
-            images_to_pdf(marked_bgr, Path(out_path))
+            # Stream the marked-up pages into images_to_pdf as a generator
+            # instead of collecting them into a list first. images_to_pdf
+            # PNG-encodes and inserts each page as it's pulled, so this keeps
+            # at most one page's raw pixels resident at a time -- the
+            # rectified image and its marked-up copy for the scan currently
+            # being rendered -- instead of every graded page's full-resolution
+            # marked-up array all at once. That list used to be the actual
+            # memory hog on a big batch: dropping `scan.image` per scan (still
+            # done below) only ever freed half of each page's footprint, which
+            # is tight on the 1GB fly.io VM this runs on.
+            images_to_pdf(_marked_pages(graded), Path(out_path))
             on_step(f"Wrote marked-up PDF to {out_path}.")
         return result
     finally:
