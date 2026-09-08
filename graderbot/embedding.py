@@ -25,6 +25,7 @@ import base64
 import io
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Protocol, Tuple
@@ -339,7 +340,7 @@ def load_training_images(
     if not rows:
         return [], np.empty((0,), dtype=np.int64), np.empty((0,), dtype=np.int64)
 
-    images = [_download_image_rgb(row[2], client) for row in rows]
+    images = _download_many([row[2] for row in rows], client, _download_image_rgb)
     student_ids = np.array([row[0] for row in rows], dtype=np.int64)
     name_image_ids = np.array([row[1] for row in rows], dtype=np.int64)
     return images, student_ids, name_image_ids
@@ -374,6 +375,27 @@ def _download_vector(embedding_s3url: str, client) -> np.ndarray:
     bucket, key = parse_s3_url(embedding_s3url)
     body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
     return np.load(io.BytesIO(body), allow_pickle=False)
+
+
+# Every S3 GET/PUT this module makes is an independent object, so downloads
+# (and uploads) fan out across a small thread pool instead of going one
+# round-trip at a time -- `load_training_vectors`, `load_training_images` and
+# `vectorize_samples` used to serially download one object per handwriting
+# sample, which is the dominant cost of the Visualize tab (and, since it runs
+# on every Streamlit rerun regardless of which tab is on screen, of *every*
+# button click anywhere in the app) once a classroom has more than a
+# handful of samples.
+_MAX_PARALLEL_S3_CALLS = 8
+
+
+def _download_many(urls: List[str], client, download_one) -> List[np.ndarray]:
+    """Runs `download_one(url, client)` for each url, in order, using a
+    thread pool -- boto3 clients are safe to share across threads for
+    concurrent calls like this."""
+    if not urls:
+        return []
+    with ThreadPoolExecutor(max_workers=min(_MAX_PARALLEL_S3_CALLS, len(urls))) as pool:
+        return list(pool.map(lambda url: download_one(url, client), urls))
 
 
 def load_training_vectors(
@@ -425,7 +447,10 @@ def load_training_vectors(
     if not rows:
         return (*empty, 0)
 
-    downloaded = [(row[0], row[1], _download_vector(row[2], client)) for row in rows]
+    vectors_by_row = _download_many([row[2] for row in rows], client, _download_vector)
+    downloaded = [
+        (row[0], row[1], vector) for row, vector in zip(rows, vectors_by_row)
+    ]
     n_discarded = 0
     if dim is not None:
         kept = [item for item in downloaded if item[2].shape[-1] == dim]
@@ -468,7 +493,9 @@ def vectorize_samples(
         if not unembedded:
             return 0
 
-        images = [_download_image_rgb(image.image_s3url, client) for image in unembedded]
+        images = _download_many(
+            [image.image_s3url for image in unembedded], client, _download_image_rgb
+        )
         vectors = embedder.embed(images)
 
         for image, vector in zip(unembedded, vectors):

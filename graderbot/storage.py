@@ -664,6 +664,23 @@ def insert_name_embedding(conn: Connection, record: NameEmbeddingRecord) -> int:
     return cursor.lastrowid
 
 
+def embeddings_fingerprint(conn: Connection, classroom_id: int) -> Tuple[int, int]:
+    """`(count, max_id)` of a classroom's NAME_EMBEDDINGS rows -- cheap,
+    local-only stand-in for "has this classroom's embedding collection
+    changed since I last looked", so a caller (the Visualize tab's
+    `st.cache_data`) can skip re-downloading every vector from S3 on every
+    Streamlit rerun unless a new embedding actually landed."""
+    row = conn.execute(
+        """
+        SELECT COUNT(*), COALESCE(MAX(e.id), 0) FROM NAME_EMBEDDINGS e
+        JOIN STUDENT s ON s.id = e.student_id
+        WHERE s.classroom_id = ?
+        """,
+        (classroom_id,),
+    ).fetchone()
+    return (row[0], row[1])
+
+
 def insert_pending_name_label(conn: Connection, record: PendingNameLabelRecord) -> int:
     """Queues one low/no-confidence name-box crop from grading (issue #92)
     and returns the new row id."""
