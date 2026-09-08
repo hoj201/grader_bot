@@ -52,7 +52,7 @@ stored.
 All the tables live in the one SQLite DB created by `init_db` (`storage.py`).
 `CLASSROOM`/`STUDENT`/`NAME_IMAGES`/`NAME_EMBEDDINGS`/`PENDING_NAME_LABEL` form
 the roster/name-classifier chain (issues #2/#43/#46/#92); `WORKSHEET`,
-`STY_VERSION`, `MATHPIX_CALL`, and `HANDWRITING_LABEL` are standalone. The
+`STY_VERSION`, and `MATHPIX_CALL` are standalone. The
 `WORKSHEET.sty_hash -> STY_VERSION.hash` link is a convention followed in code
 (`record_sty_version`), not a SQLite `FOREIGN KEY` constraint.
 
@@ -305,27 +305,19 @@ model couldn't resolve (see the paused `handwriting-ctc-match` spike, issue
   which writes `models/response_scorer/{weights.onnx,vocab.json}` straight
   into the repo. `training/eval.py` reports per-answer-type accuracy on
   held-out synthetic data.
-- **Real-data labeling, two ways**, both writing to the same
-  `HANDWRITING_LABEL` table:
-  - **Copy worksheets** (Handwriting Data tab, `graderbot/handwriting_sample_worksheets.py`
-    + `graderbot/handwriting_harvest.py`) — the preferred path. Generates an
-    ordinary worksheet where each box already prints its own answer, so the
-    student only copies it by hand; the printed text *is* the ground truth,
-    so every scanned-back box becomes a trustworthy label with **no manual
-    review**. This is real student handwriting captured through the normal
-    scan/registration pipeline, not synthetic-font renders or a borrowed
-    dataset like MNIST (isolated digits, no `.`/`-`, no multi-character
-    sequences, no box-crop realism).
-  - `scripts/label_handwriting.py` walks unreviewed `MATHPIX_CALL` crops one
-    at a time (seeded from Mathpix's own guess) and records a
-    confirmed/corrected label — useful for labeling *existing* scans of
-    real graded worksheets, where a human's review is still the source of
-    truth.
-
-  Either way, real labels are the ground truth a synthetic-only model needs
-  checked against before being trusted (the gap that sank the `pylaia-iam`
-  spike). Until a real-data eval exists, the Grade tab option stays labeled
-  "(experimental)".
+- **No real-data labeling.** A "copy worksheet" harvesting flow (a
+  worksheet that already printed each answer for the student to copy, so
+  the printed text was trusted as the ground-truth label) was tried and
+  removed: asking students to manually annotate their own handwriting
+  doesn't reflect how they actually write on a normal worksheet (students
+  write far more neatly when asked to copy a printed answer), so the labels
+  it produced weren't representative. A separate Mathpix-seeded manual
+  review pass (`scripts/label_handwriting.py`) was removed alongside it.
+  Real labels are the ground truth a synthetic-only model needs checked
+  against before being trusted (the gap that sank the `pylaia-iam` spike),
+  so until a trustworthy real-data source exists, the Grade tab option
+  stays labeled "(experimental)" and `training/eval.py` only reports the
+  synthetic side.
 
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box
@@ -377,7 +369,7 @@ without re-ingesting silently shrinks the training set rather than mixing
 incompatible vectors.
 
 ## Web frontend
-[app.py](./graderbot/app.py) is a Streamlit app with eight tabs: **Gallery**, to browse
+[app.py](./graderbot/app.py) is a Streamlit app with seven tabs: **Gallery**, to browse
 previously created worksheets and open their student/cv/answer-key PDFs via
 presigned S3 links; **Create**, to generate a new worksheet from a
 prompt (runs the same pipeline as `graderbot.worksheetbot`, including S3 upload +
@@ -387,10 +379,9 @@ and download a printable PDF of name-collection worksheets — one page per
 student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45);
 **Roster**, to ingest those sheets back in and manage a class's students;
 **Visualize**, to inspect, cross-validate, and train the handwriting name
-classifier (see above); **Label Names**, to manually assign a student to the
-low/no-confidence name crops grading queues up (issue #92, see above); and
-**Handwriting Data**, to generate/harvest copy worksheets for the CNN
-response-verifier's training set (issue #81, see above). Each graded page's QR code is matched to its stored
+classifier (see above); and **Label Names**, to manually assign a student to
+the low/no-confidence name crops grading queues up (issue #92, see above).
+Each graded page's QR code is matched to its stored
 worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
 as per-student JSON results and as a single marked-up PDF (correct answers

@@ -27,10 +27,7 @@ from graderbot.response_scorer import VOCAB, prepare_crop_for_model
 
 # Kept as a local alias (not a re-export) so eval.py's existing `from
 # dataset import _SAMPLE_ANSWER_POOL` keeps working -- the canonical
-# definition lives in graderbot.response_candidates.SAMPLE_ANSWER_POOL, also
-# shared by handwriting_sample_worksheets.py's real-data harvesting (issue
-# #81), so the synthetic and real halves of training data cover the same
-# answer shapes.
+# definition lives in graderbot.response_candidates.SAMPLE_ANSWER_POOL.
 _SAMPLE_ANSWER_POOL: List[str] = list(SAMPLE_ANSWER_POOL)
 
 # Fraction of samples drawn from a near-miss (response_candidates) instead
