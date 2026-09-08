@@ -1182,12 +1182,15 @@ def render_label_names() -> None:
     student's name with low or no confidence (see
     `pending_name_capture.maybe_capture_pending_name_label`, wired into
     `render_grade`'s `mark_scan` call); those name-box crops land in a
-    per-classroom queue here for a quick manual check. Confirming one adds
-    it straight to the handwriting classifier's training data (the same
-    NAME_IMAGES table `ingest_name_sheets` writes to) and embeds it
-    immediately, so it's ready to use the next time the Visualize tab
-    retrains. Tasks are served one at a time, chosen uniformly at random,
-    per the issue's "for the moment" scope.
+    queue here for a quick manual check. As of issue #97 the queue and
+    roster both span every classroom, rather than filtering to one
+    classroom at a time -- a crop from any classroom can be assigned to
+    any student. Confirming one adds it straight to the handwriting
+    classifier's training data (the same NAME_IMAGES table
+    `ingest_name_sheets` writes to) and embeds it immediately, so it's
+    ready to use the next time the Visualize tab retrains. Tasks are
+    served one at a time, chosen uniformly at random, per issue #92's "for
+    the moment" scope.
     """
     st.write(
         "Grading a scan sometimes reads a student's name with low or no "
@@ -1196,32 +1199,37 @@ def render_label_names() -> None:
         "classifier's training data -- retrain on the Visualize tab "
         "afterwards to put it to use."
     )
-    classroom = _select_classroom("label_names_classroom", allow_create=False)
-    if classroom is None:
-        return
 
     conn = storage.init_db(DB_PATH)
     try:
-        students = storage.list_students(conn, classroom.id)
-        pending_count = storage.count_pending_name_labels(conn, classroom.id)
+        classrooms = storage.list_classrooms(conn)
+        students = storage.list_all_students(conn)
+        pending_count = storage.count_all_pending_name_labels(conn)
     finally:
         conn.close()
 
-    st.caption(f"{pending_count} crop(s) awaiting review for {classroom.label}.")
+    st.caption(f"{pending_count} crop(s) awaiting review.")
     if not students:
-        st.info("No students in this class yet.")
+        st.info("No students yet.")
         return
 
-    # Stash the crop currently on screen in session_state, keyed by
-    # classroom, so it survives the rerun every widget interaction triggers
-    # within this run (same pattern as ai_preview in _render_create_ai) --
-    # otherwise a fresh random pick on every rerun would swap out the crop
-    # from under the selectbox/buttons below.
-    state_key = f"label_names_pending_{classroom.id}"
+    classroom_labels = {c.id: c.label for c in classrooms}
+
+    def student_label(s: "storage.StudentRecord") -> str:
+        name = f"{s.first_name} {s.last_name}".strip()
+        return f"{name} ({classroom_labels.get(s.classroom_id, '?')})"
+
+    # Stash the crop currently on screen in session_state so it survives
+    # the rerun every widget interaction triggers within this run (same
+    # pattern as ai_preview in _render_create_ai) -- otherwise a fresh
+    # random pick on every rerun would swap out the crop from under the
+    # selectbox/buttons below. No longer keyed by classroom (issue #97):
+    # there's a single queue spanning every classroom now.
+    state_key = "label_names_pending"
     if state_key not in st.session_state:
         conn = storage.init_db(DB_PATH)
         try:
-            st.session_state[state_key] = storage.random_pending_name_label(conn, classroom.id)
+            st.session_state[state_key] = storage.random_pending_name_label_any(conn)
         finally:
             conn.close()
 
@@ -1242,8 +1250,15 @@ def render_label_names() -> None:
     st.image(image_bytes, caption=caption, width=300)
 
     unknown_option = "(not sure / discard)"
-    options = [unknown_option] + [f"{s.first_name} {s.last_name}".strip() for s in students]
-    default_index = options.index(pending.predicted_name) if pending.predicted_name in options else 0
+    options = [unknown_option] + [student_label(s) for s in students]
+    default_index = next(
+        (
+            i
+            for i, s in enumerate(students, start=1)
+            if f"{s.first_name} {s.last_name}".strip() == pending.predicted_name
+        ),
+        0,
+    )
     choice = st.selectbox(
         "Who wrote this?", options, index=default_index, key=f"label_names_choice_{pending.id}"
     )
@@ -1255,7 +1270,7 @@ def render_label_names() -> None:
         key=f"label_names_assign_{pending.id}",
         disabled=choice == unknown_option,
     ):
-        student = next(s for s in students if f"{s.first_name} {s.last_name}".strip() == choice)
+        student = next(s for s in students if student_label(s) == choice)
         conn = storage.init_db(DB_PATH)
         try:
             storage.insert_name_image(
@@ -1276,8 +1291,7 @@ def render_label_names() -> None:
         except Exception:  # noqa: BLE001 - labeling must survive an embedding hiccup
             logger.warning("failed to vectorize newly-labeled name image", exc_info=True)
         logger.info(
-            "labeled pending name crop id=%s classroom=%s student=%s",
-            pending.id, classroom.id, student.id,
+            "labeled pending name crop id=%s student=%s", pending.id, student.id,
         )
         st.session_state.pop(state_key, None)
         st.rerun()
@@ -1288,7 +1302,7 @@ def render_label_names() -> None:
             storage.delete_pending_name_label(conn, pending.id)
         finally:
             conn.close()
-        logger.info("discarded pending name crop id=%s classroom=%s", pending.id, classroom.id)
+        logger.info("discarded pending name crop id=%s", pending.id)
         st.session_state.pop(state_key, None)
         st.rerun()
 
