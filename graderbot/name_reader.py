@@ -16,10 +16,13 @@ per-roster accuracy is not known ahead of time.
 
 Both readers take a whole batch of pages and one shared name `Box`, so a remote
 embedder embeds every page of a worksheet group in a single API call rather than
-one call per page. Both crop with `_crop_box(..., _BOX_INSET)` -- the same crop
-`name_dataset` takes when building the training set, and the collection-sheet
-boxes are deliberately the same size as the header name box, so a crop taken
-here is geometrically comparable to the crops the classifier was trained on.
+one call per page. Both crop with `crop_name_box(..., _BOX_INSET)`, which also
+whites out the printed "Name:" label baked into the header box's top-left
+corner (see `graderbot.imaging`) -- the plain `_crop_box(..., _BOX_INSET)`
+`name_dataset` takes when building the training set has no such label to
+strip, but the collection-sheet boxes are deliberately the same size as the
+header name box, so once the label is stripped a crop taken here is still
+geometrically comparable to the crops the classifier was trained on.
 """
 
 import logging
@@ -30,7 +33,7 @@ from typing import Dict, List, Optional, Protocol, Union
 import numpy as np
 
 from graderbot.embedding import Embedder, default_embedder
-from graderbot.imaging import _crop_box, is_blank
+from graderbot.imaging import crop_name_box, is_blank
 from graderbot.models import Box
 from graderbot.ocr import _BOX_INSET, extract_name_scored
 from graderbot.storage import init_db, list_students
@@ -76,7 +79,7 @@ class OcrNameReader:
     def read_many(self, images: List[np.ndarray], box: Box) -> List[NameGuess]:
         guesses = []
         for image in images:
-            crop = _crop_box(image, box, _BOX_INSET)
+            crop = crop_name_box(image, box, _BOX_INSET)
             if crop.size > 0 and is_blank(crop):
                 guesses.append(NameGuess(name="", confidence=0.0, source=OCR_SOURCE))
                 continue
@@ -146,7 +149,7 @@ class ClassifierNameReader:
     def read_many(self, images: List[np.ndarray], box: Box) -> List[NameGuess]:
         if not images:
             return []
-        crops = [_crop_box(image, box, _BOX_INSET) for image in images]
+        crops = [crop_name_box(image, box, _BOX_INSET) for image in images]
 
         # A blank name box never reaches the embedder/classifier (issue #66)
         # -- without this check the classifier has no "blank" class to fall

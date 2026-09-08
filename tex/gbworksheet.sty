@@ -305,6 +305,22 @@
         rectangle
         (\worksheet@nameboxwidth,\worksheet@nameboxheight);
 
+        % "Name:" label printed inside the box: this used to sit on its own
+        % line above the box, and students habitually wrote their name right
+        % after it -- on the blank line above the box, not inside it, so
+        % grading's name-box crop (_NAME_BOX_ID) never saw their handwriting.
+        % Anchoring it at the box's own top-left corner keeps that habit
+        % landing inside the box. The label's footprint (as a fraction of
+        % nameboxwidth/nameboxheight) MUST stay in sync with
+        % `_NAME_LABEL_WIDTH_FRAC`/`_NAME_LABEL_HEIGHT_FRAC` in
+        % graderbot/imaging.py, which whites this region out before OCR/the
+        % name classifier sees the crop.
+        \node[
+            font=\small\bfseries,
+            anchor=north west,
+            inner sep=3pt
+        ] at (0,\worksheet@nameboxheight) {Name:};
+
     \fi
 }
 }
@@ -322,7 +338,10 @@
 
 \noindent
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ll}
-\textbf{Name:} & \textbf{Date:}\\
+% "Name:" now prints inside \worksheet@NameBox itself (see the Name box
+% section above) instead of on its own line here, so students who write
+% immediately after the label land inside the box, not above it.
+ & \textbf{Date:}\\
 \worksheet@NameBox & \hrulefill
 \end{tabular*}
 

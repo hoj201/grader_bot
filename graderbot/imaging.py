@@ -53,6 +53,38 @@ def _crop_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
     return image[y0:y1, x0:x1]
 
 
+# Fraction of the worksheet's name box's own width/height covered by the
+# printed "Name:" label baked into its top-left corner (`\worksheet@NameBox`
+# in gbworksheet.sty). The label sits there so students who write immediately
+# after "Name:" -- their habit -- land inside the box instead of on the blank
+# line that used to sit above it. Both `OcrNameReader` and `ClassifierNameReader`
+# read this same box, so the label has to be whited out before either sees the
+# crop: left as-is it reads as ink (defeats the `is_blank` check on an
+# otherwise-empty box) and as noise the classifier was never trained on (the
+# name-collection sheet's boxes carry no such label). These fractions are
+# deliberately generous relative to the label's actual rendered size, so a
+# small font/inset change in the .sty doesn't require touching this constant
+# -- but a bigger layout change there does. Measured off a compiled render:
+# the label occupies about 19% of the box's width and 39% of its height.
+_NAME_LABEL_WIDTH_FRAC = 0.28
+_NAME_LABEL_HEIGHT_FRAC = 0.50
+
+
+def crop_name_box(image: np.ndarray, box: Box, inset: float) -> np.ndarray:
+    """Like `_crop_box`, but for the worksheet's name box specifically: also
+    whites out the printed "Name:" label in the box's top-left corner (see
+    `_NAME_LABEL_WIDTH_FRAC`/`_NAME_LABEL_HEIGHT_FRAC`) so callers only ever
+    see the student's own handwriting."""
+    full = _crop_box(image, box, 0.0)
+    height, width = full.shape[:2]
+    label_w = round(_NAME_LABEL_WIDTH_FRAC * width)
+    label_h = round(_NAME_LABEL_HEIGHT_FRAC * height)
+    full = full.copy()
+    full[:label_h, :label_w] = 255
+    inset_x, inset_y = round(inset * width), round(inset * height)
+    return full[inset_y : height - inset_y, inset_x : width - inset_x]
+
+
 # Pixel margin (not a fraction of the box's own size, unlike `_BOX_INSET` in
 # ocr.py) used only to skip past the printed border stroke before looking for
 # ink. The border renders at a roughly constant few-pixel width regardless of

@@ -11,7 +11,7 @@ import pytesseract
 import requests
 from dotenv import load_dotenv
 
-from graderbot.imaging import _crop_box, crop_box_content_aware
+from graderbot.imaging import crop_box_content_aware, crop_name_box
 from graderbot.models import Box
 
 load_dotenv()
@@ -110,7 +110,7 @@ def extract_name_scored(
     match can be spotted by eye (issue #58). Returns `("", 0.0)` when nothing
     clears `_NAME_MATCH_CUTOFF`.
     """
-    cropped = _crop_box(image, box, _BOX_INSET)
+    cropped = crop_name_box(image, box, _BOX_INSET)
     ocr_text = _tesseract_ocr_name(cropped)
     matches = difflib.get_close_matches(ocr_text, roster, n=1, cutoff=_NAME_MATCH_CUTOFF)
     if not matches:
