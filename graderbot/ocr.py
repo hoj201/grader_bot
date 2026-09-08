@@ -60,8 +60,9 @@ _GREEK_MISREAD_PATTERN = re.compile(
 
 # Identifies which AnswerReader produced an OcrResult (issue #70), so a
 # graded result can be traced back to the backend that read it once more
-# than one is in play. See answer_reader.EASYOCR_SOURCE for the other one --
-# defined there rather than here since only this module needs its own.
+# than one is in play. See answer_reader.GOOGLE_VISION_SOURCE and
+# answer_reader.NO_OCR_SOURCE for the others -- defined there rather than
+# here since only this module needs its own.
 MATHPIX_SOURCE = "mathpix"
 
 
@@ -73,13 +74,14 @@ class OcrResult:
 
     - `text`: the repaired text grading actually compares against, after
       Mathpix's `_strip_math_delimiters`/`_fix_stray_slashes`/`_fix_greek_misreads`
-      (EasyOCR has no repair step yet, so its `text` and `raw_text` match).
+      (some backends have no repair step, so their `text` and `raw_text` match).
     - `raw_text`: the backend's own text before any of that repair, so a
       wrong answer can be traced back to what it literally read.
     - `confidence`: the backend's self-reported confidence for the read
       (0-1), or `None` if it didn't report one.
-    - `source`: which backend produced this (`MATHPIX_SOURCE` or
-      `answer_reader.EASYOCR_SOURCE`), or `""` if unspecified.
+    - `source`: which backend produced this (`MATHPIX_SOURCE`,
+      `answer_reader.GOOGLE_VISION_SOURCE`, or `answer_reader.NO_OCR_SOURCE`),
+      or `""` if unspecified.
     """
 
     text: str

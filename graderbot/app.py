@@ -23,12 +23,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graderbot import embedding, name_classifier, storage
-from graderbot.answer_reader import (
-    EASYOCR_DEFAULT_ALLOWLIST,
-    EasyOcrAnswerReader,
-    GoogleVisionAnswerReader,
-    NoOcrAnswerReader,
-)
+from graderbot.answer_reader import GoogleVisionAnswerReader, NoOcrAnswerReader
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.handwriting_harvest import harvest_handwriting_labels
 from graderbot.handwriting_sample_worksheets import build_handwriting_sample_worksheet
@@ -79,7 +74,6 @@ _CLASSIFIER_NAME_SOURCE = "Handwriting classifier"
 _OCR_NAME_SOURCE = "OCR (Tesseract)"
 
 _MATHPIX_ANSWER_SOURCE = "Mathpix"
-_EASYOCR_ANSWER_SOURCE = "EasyOCR"
 _GOOGLE_VISION_ANSWER_SOURCE = "Google Cloud Vision"
 _CNN_VERIFIER_ANSWER_SOURCE = "CNN verifier (experimental)"
 _NO_OCR_ANSWER_SOURCE = "No OCR (blank detection only)"
@@ -956,7 +950,6 @@ def render_grade() -> None:
 
     answer_options = [
         _MATHPIX_ANSWER_SOURCE,
-        _EASYOCR_ANSWER_SOURCE,
         _GOOGLE_VISION_ANSWER_SOURCE,
         _CNN_VERIFIER_ANSWER_SOURCE,
         _NO_OCR_ANSWER_SOURCE,
@@ -964,34 +957,14 @@ def render_grade() -> None:
     answer_source = st.selectbox(
         "Read answers with",
         answer_options,
-        index=0,
+        # No OCR is the default (issue #82): EasyOCR, the previous fallback
+        # for sloppy handwriting, read student handwriting too poorly to
+        # trust and was removed, and no other backend has earned the default
+        # in its place.
+        index=answer_options.index(_NO_OCR_ANSWER_SOURCE),
         key="grade_answer_source",
     )
-    easyocr_extra_chars = ""
-    easyocr_detect_fractions = False
-    if answer_source == _EASYOCR_ANSWER_SOURCE:
-        easyocr_extra_chars = st.text_input(
-            f"Extra characters to allow (appended to '{EASYOCR_DEFAULT_ALLOWLIST}')",
-            key="grade_easyocr_extra_chars",
-            help="EasyOCR only recognizes characters in this allowlist. Widen it "
-            "for a worksheet that needs more (e.g. 'xy' for algebra).",
-        )
-        easyocr_detect_fractions = st.checkbox(
-            "Try to detect fractions (experimental)",
-            key="grade_easyocr_detect_fractions",
-            help="Looks for a handwritten fraction bar and OCRs the numerator/"
-            "denominator separately. Off by default: a false-positive bar "
-            "detection on ordinary handwriting would misread a plain answer, "
-            "so only turn this on for a worksheet that actually has fraction "
-            "questions. Mathpix remains the more reliable choice for fractions.",
-        )
-        st.caption(
-            "EasyOCR can't read fractions unless the box above is checked — "
-            "use Mathpix for worksheets with fraction answers if unsure. "
-            "Requires the easyocr_service sidecar (`docker compose up -d "
-            "easyocr`) and EASYOCR_SERVICE_URL set."
-        )
-    elif answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
+    if answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
         st.caption(
             "Google Cloud Vision can't read fractions either — use Mathpix for "
             "worksheets with fraction answers. Requires GOOGLE_VISION_API_KEY."
@@ -1067,16 +1040,7 @@ def render_grade() -> None:
 
     answer_reader = None
     response_scorer = None
-    if answer_source == _EASYOCR_ANSWER_SOURCE:
-        allowlist = EASYOCR_DEFAULT_ALLOWLIST + easyocr_extra_chars
-        try:
-            answer_reader = EasyOcrAnswerReader(
-                allowlist=allowlist, detect_fractions=easyocr_detect_fractions
-            )
-        except EnvironmentError as e:
-            st.error(str(e))
-            return
-    elif answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
+    if answer_source == _GOOGLE_VISION_ANSWER_SOURCE:
         try:
             answer_reader = GoogleVisionAnswerReader()
         except EnvironmentError as e:

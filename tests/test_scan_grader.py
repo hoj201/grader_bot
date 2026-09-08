@@ -420,7 +420,7 @@ def test_mark_scan_forwards_the_name_reader(
 
 def test_grade_scans_forwards_the_answer_reader(db_with_two_worksheets, patched_cv):
     """Passing a reader switches the answer-box OCR backend -- this is how the
-    Grade tab switches to EasyOCR (issue #70)."""
+    Grade tab switches to Google Cloud Vision or No OCR (issue #70)."""
     sentinel = object()
 
     grade_scans(

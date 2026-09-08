@@ -8,10 +8,10 @@ Well under 1M parameters, trained with CTC loss (`train.py`) and exported to
 ONNX (`export_onnx.py`) so the *trained* model can be used without torch at
 all (see `graderbot/response_scorer.py`'s module docstring).
 
-Kept in this isolated `training/` directory rather than `graderbot/` itself
--- same reasoning as `easyocr_service/`: torch has no Intel-macOS wheel for
-this project's Python version, so it must never become a
-`pyproject.toml` dependency of the main project. Training runs offline
+Kept in this isolated `training/` directory rather than `graderbot/` itself:
+torch has no Intel-macOS wheel for this project's Python version, so it
+must never become a `pyproject.toml` dependency of the main project.
+Training runs offline
 (locally on a machine with a torch wheel, or on Modal -- see
 `modal_app.py`), never at grading time.
 """
