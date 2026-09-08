@@ -382,6 +382,28 @@ def render_roster() -> None:
                         st.rerun()
 
 
+@st.cache_data(show_spinner=False)
+def _cached_training_vectors(
+    db_path_str: str, bucket: str | None, classroom_id: int, dim: int | None, fingerprint
+):
+    """Cached `embedding.load_training_vectors`, keyed (in part) on
+    `fingerprint` -- a classroom's `storage.embeddings_fingerprint`.
+
+    Streamlit reruns every tab's code top-to-bottom on *any* widget
+    interaction anywhere in the app, not just the tab you're looking at
+    (`st.tabs` is a display-only grouping). Without this cache, every
+    handwriting-sample embedding for whichever classroom happens to be
+    selected here gets re-downloaded from S3, one object at a time, on every
+    single click in the app -- including "Assign" on the Label Names tab,
+    which is what made it feel like the whole database was reloading from
+    scratch. `fingerprint` changing is what invalidates this: a plain
+    `st.cache_data` without it would instead go stale and hide newly
+    embedded samples."""
+    return embedding.load_training_vectors(
+        Path(db_path_str), bucket=bucket, classroom_id=classroom_id, dim=dim
+    )
+
+
 def render_visualize() -> None:
     st.write(
         "3D t-SNE projection of each student's handwriting-sample embeddings, "
@@ -394,6 +416,7 @@ def render_visualize() -> None:
     conn = storage.init_db(DB_PATH)
     try:
         students = storage.list_students(conn, classroom.id)
+        fingerprint = storage.embeddings_fingerprint(conn, classroom.id)
     finally:
         conn.close()
 
@@ -401,8 +424,8 @@ def render_visualize() -> None:
         st.info("No students in this class yet.")
         return
 
-    vectors, student_ids, name_image_ids, discarded = embedding.load_training_vectors(
-        DB_PATH, bucket=BUCKET, classroom_id=classroom.id, dim=_embedder_dim()
+    vectors, student_ids, name_image_ids, discarded = _cached_training_vectors(
+        str(DB_PATH), BUCKET, classroom.id, _embedder_dim(), fingerprint
     )
     if discarded:
         st.warning(
