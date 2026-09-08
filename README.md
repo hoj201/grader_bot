@@ -236,97 +236,36 @@ Logging failures are non-fatal — they never interrupt OCR or grading. Set in
 MATHPIX_LOG_BUCKET=<your-bucket-name>   # optional; defaults to S3_BUCKET
 ```
 
-### Answer OCR: Mathpix vs EasyOCR vs Google Cloud Vision
-Answer boxes are read by Mathpix by default (`graderbot/ocr.py`), which
-handles handwritten LaTeX fractions well but is tuned for college-level math
-and occasionally misreads a sloppy digit (issue #70: "9" as "G", "14" as
-"1 h"). The Grade tab's "Read answers with" dropdown can switch a run to
-EasyOCR or Google Cloud Vision instead — by default neither reads fractions,
-so stick with Mathpix for worksheets that have them:
-- **EasyOCR** is restricted to a character allowlist (default `0123456789.`,
-  widened per run from the same dropdown, e.g. append `xy` for an algebra
-  worksheet). It also has an experimental "Try to detect fractions" checkbox
-  (off by default): `_detect_fraction_bar` looks for a single long
-  horizontal ink stroke spanning most of the box's width with OpenCV, and if
-  found, splits the crop and OCRs the numerator/denominator separately
-  instead of the whole box at once. It's opt-in because a false-positive bar
-  detection on ordinary sloppy handwriting -- the exact problem domain here
-  -- would silently misread a plain answer; only turn it on for a worksheet
-  that actually has fraction questions.
+### Answer OCR: No OCR vs Mathpix vs Google Cloud Vision
+Answer boxes default to **No OCR** (issue #82): it never attempts to
+transcribe the box at all. It relies entirely on the existing
+blank-detection check every backend already runs before OCR
+(`imaging.is_blank`): a blank box is still graded as blank, but a filled-in
+box is simply marked wrong (with the correct answer written beside it, same
+as any other wrong answer) without ever guessing what was written. Students
+still get to see which answers they got right, without OCR ever having a
+chance to misread their handwriting. The Grade tab's "Read answers with"
+dropdown can switch a run to Mathpix or Google Cloud Vision instead:
+- **Mathpix** (`graderbot/ocr.py`) handles handwritten LaTeX fractions well
+  but is tuned for college-level math and occasionally misreads a sloppy
+  digit (issue #70: "9" as "G", "14" as "1 h"). It's the only backend that
+  reads fractions, so switch to it for a worksheet that has them.
 - **Google Cloud Vision** uses `DOCUMENT_TEXT_DETECTION` (Google's mode for
   dense/handwritten text) with no allowlist support and no fraction-splitting.
-- **No OCR** (issue #83) never attempts to transcribe the box at all. It
-  relies entirely on the existing blank-detection check every backend
-  already runs before OCR (`imaging.is_blank`): a blank box is still graded
-  as blank, but a filled-in box is simply marked wrong (with the correct
-  answer written beside it, same as any other wrong answer) without ever
-  guessing what was written. Use it for a class whose handwriting is sloppy
-  enough that Mathpix/EasyOCR/Google Vision all misread it too often to
-  trust — students still get to see which answers they got right.
 
-`graderbot/answer_reader.py`'s four `AnswerReader`s (`MathpixAnswerReader`,
-`EasyOcrAnswerReader`, `GoogleVisionAnswerReader`, `NoOcrAnswerReader`) mirror
-the existing `NameReader` pattern used for student identification.
+An EasyOCR backend used to sit between these two (issue #70), restricted to
+a character allowlist plus an experimental fraction-bar detector. It was
+removed (issue #82): it read student handwriting too poorly to be worth the
+separate sidecar service (`easyocr_service/`, plus its Docker/Modal
+deployment) it required.
 
-**EasyOCR** runs as a **separate sidecar service** (`easyocr_service/`)
-rather than a `graderbot` dependency: its only real dependency, torch, ships
-no wheel for Intel Mac and is heavy to bundle into the main deploy image.
-Two ways to run it, same image contents either way:
+`graderbot/answer_reader.py`'s three `AnswerReader`s (`MathpixAnswerReader`,
+`GoogleVisionAnswerReader`, `NoOcrAnswerReader`) mirror the existing
+`NameReader` pattern used for student identification.
 
-*Locally*, via Docker:
-```shell
-docker compose up -d easyocr
-```
-then set in `.env`:
-```
-EASYOCR_SERVICE_URL=http://localhost:8080
-```
-Its own tests (`easyocr_service/test_main.py`) run inside the container, not
-via the main `poetry run pytest` (fastapi/easyocr/torch are deliberately not
-in this project's venv):
-```shell
-docker compose build easyocr
-docker compose run --rm easyocr pytest -q
-```
-
-*Deployed*, on [Modal](https://modal.com) — this is how anything other than
-your own laptop (e.g. the fly.io-hosted app) reaches it. One-time setup:
-```shell
-poetry run modal setup                                    # browser auth, once per machine
-
-# Generate the key into a local shell variable so you can reuse the exact
-# same value below -- `modal secret create` only sends it to Modal, it
-# doesn't print it back out or save it anywhere for you.
-EASYOCR_API_KEY=$(openssl rand -hex 32)
-echo "$EASYOCR_API_KEY"                                    # copy this -- you need it again below
-poetry run modal secret create easyocr-api-key EASYOCR_API_KEY=$EASYOCR_API_KEY
-```
-Then deploy (and redeploy after any `easyocr_service/` change):
-```shell
-poetry run modal deploy easyocr_service/modal_app.py
-```
-This prints a URL ending in `-web.modal.run`. Set both of these in `.env`
-(and wherever the Streamlit app itself runs) — `EASYOCR_API_KEY` must be the
-*same* value you just gave `modal secret create`, not a new one:
-```
-EASYOCR_SERVICE_URL=<the printed *.modal.run URL>
-EASYOCR_API_KEY=<the value echoed above>
-```
-Unlike a `localhost` URL, the Modal URL is public, so `main.py` rejects any
-`/ocr` request that doesn't echo `EASYOCR_API_KEY` back as an `X-Api-Key`
-header once that secret is present in its environment — the local
-docker-compose container never gets this secret, so local dev is unaffected
-and needs no key at all. `EasyOcrAnswerReader` raises a clear error (same
-failure mode as a missing Mathpix key) if `EASYOCR_SERVICE_URL` isn't set;
-`EASYOCR_API_KEY` is optional and simply omitted from the request if unset.
-
-Model weights (~70MB) are cached in a Modal `Volume` (`easyocr-models`) so
-only the first request after a cold start pays the download; `_get_reader`
-still defers loading them into memory until the first `/ocr` call either way.
-
-**Google Cloud Vision**, unlike EasyOCR, needs no sidecar and no new Python
-dependency — `GoogleVisionAnswerReader` calls the Vision REST API directly
-with `requests`, the same shape as the Mathpix call. Set in `.env`:
+**Google Cloud Vision** needs no sidecar and no new Python dependency —
+`GoogleVisionAnswerReader` calls the Vision REST API directly with
+`requests`, the same shape as the Mathpix call. Set in `.env`:
 ```
 GOOGLE_VISION_API_KEY=<your-api-key>
 ```
@@ -335,7 +274,7 @@ https://cloud.google.com/vision/docs/setup). Works on fly.io as-is, since
 it's a plain HTTPS call.
 
 ### Answer verification: CNN verifier (experimental, issue #81)
-All three backends above transcribe a crop open-vocabulary, with no idea
+Both backends above transcribe a crop open-vocabulary, with no idea
 what a middle-school worksheet's answer is even supposed to look like. The
 "CNN verifier (experimental)" option in the Grade tab's "Read answers with"
 dropdown instead **verifies** a crop against the known answer plus a
@@ -350,16 +289,15 @@ model couldn't resolve (see the paused `handwriting-ctc-match` spike, issue
   negatives. A `\frac{a}{b}` question on the same worksheet still falls
   back to Mathpix automatically; there's no need to switch dropdowns
   mid-worksheet.
-- **Runs in-process**, unlike EasyOCR — its only dependency,
-  `onnxruntime`, ships real wheels for both Intel macOS and fly.io (unlike
-  torch), so `CnnResponseScorer` (`graderbot/response_scorer.py`) just
-  loads `models/response_scorer/weights.onnx` off disk, no sidecar, no
-  Modal deployment for inference.
+- **Runs in-process** — its only dependency, `onnxruntime`, ships real
+  wheels for both Intel macOS and fly.io (unlike torch), so
+  `CnnResponseScorer` (`graderbot/response_scorer.py`) just loads
+  `models/response_scorer/weights.onnx` off disk, no sidecar, no Modal
+  deployment for inference.
 - **Training is the part that needs Modal** — the CRNN itself is trained
   with torch (`training/`, isolated from the main project's
-  `pyproject.toml` the same way `easyocr_service/` isolates EasyOCR's torch
-  dependency), and this dev environment has no torch wheel available at
-  all. Generate synthetic training crops with
+  `pyproject.toml` since this dev environment has no torch wheel available
+  at all). Generate synthetic training crops with
   `graderbot/answer_glyph_synth.py`, train + export with:
   ```shell
   poetry run modal run training/modal_app.py --steps 20000

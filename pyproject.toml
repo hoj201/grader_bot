@@ -33,9 +33,8 @@ modal = "^1.5.4"
 # to sys.path so `import graderbot` resolves without an install step.
 pythonpath = ["."]
 # Restrict collection to tests/ so `poetry run pytest` never tries to import
-# easyocr_service/test_main.py -- that service's dependencies (fastapi,
-# easyocr/torch) are intentionally not in this project's venv (see
-# graderbot/answer_reader.py); its tests run inside its own container.
+# stray test-shaped files elsewhere in the repo (e.g. training/, which is
+# isolated on purpose -- torch is intentionally not in this project's venv).
 testpaths = ["tests"]
 # -n auto (pytest-xdist) spreads the suite across all idle cores instead of
 # running ~100s of CPU almost serially (issue #78). Tests that compile the

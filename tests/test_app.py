@@ -8,7 +8,7 @@ from moto import mock_aws
 from streamlit.testing.v1 import AppTest
 
 from graderbot import app, name_classifier, scan_grader, storage
-from graderbot.answer_reader import EasyOcrAnswerReader, GoogleVisionAnswerReader, NoOcrAnswerReader
+from graderbot.answer_reader import GoogleVisionAnswerReader, NoOcrAnswerReader
 from graderbot.models import QuestionResult
 from graderbot.worksheetbot import Question, WorksheetDocument
 
@@ -1055,7 +1055,10 @@ def test_grade_tab_errors_rather_than_silently_using_ocr(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow
-def test_grade_tab_defaults_to_mathpix_for_answers(tmp_path, monkeypatch):
+def test_grade_tab_defaults_to_no_ocr_for_answers(tmp_path, monkeypatch):
+    """issue #82: No OCR is the default -- EasyOCR (the previous fallback for
+    sloppy handwriting) was removed for reading it too poorly to trust, and
+    no other backend has earned the default in its place."""
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
 
@@ -1064,138 +1067,7 @@ def test_grade_tab_defaults_to_mathpix_for_answers(tmp_path, monkeypatch):
 
     assert not at.exception
     source = next(s for s in at.selectbox if "Read answers with" in s.label)
-    assert source.value == "Mathpix"
-
-
-@pytest.mark.slow
-def test_grade_tab_passes_an_easyocr_reader_when_selected(tmp_path, monkeypatch):
-    db_path = tmp_path / "worksheets.sqlite3"
-    _set_env(monkeypatch, db_path)
-    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
-
-    seen = {}
-
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
-        seen["answer_reader"] = answer_reader
-        return scan_grader.ScanBatchResult()
-
-    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
-
-    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.run()
-    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
-    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
-    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
-    at.run()
-    next(b for b in at.button if b.label == "Grade").click().run()
-
-    assert not at.exception
-    assert isinstance(seen["answer_reader"], EasyOcrAnswerReader)
-    assert seen["answer_reader"].allowlist == "0123456789."
-
-
-@pytest.mark.slow
-def test_grade_tab_easyocr_extra_chars_widen_the_allowlist(tmp_path, monkeypatch):
-    db_path = tmp_path / "worksheets.sqlite3"
-    _set_env(monkeypatch, db_path)
-    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
-
-    seen = {}
-
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
-        seen["answer_reader"] = answer_reader
-        return scan_grader.ScanBatchResult()
-
-    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
-
-    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.run()
-    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
-    at.text_input(key="grade_easyocr_extra_chars").set_value("xy").run()
-    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
-    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
-    at.run()
-    next(b for b in at.button if b.label == "Grade").click().run()
-
-    assert not at.exception
-    assert seen["answer_reader"].allowlist == "0123456789.xy"
-
-
-@pytest.mark.slow
-def test_grade_tab_easyocr_detect_fractions_defaults_off(tmp_path, monkeypatch):
-    db_path = tmp_path / "worksheets.sqlite3"
-    _set_env(monkeypatch, db_path)
-    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
-
-    seen = {}
-
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
-        seen["answer_reader"] = answer_reader
-        return scan_grader.ScanBatchResult()
-
-    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
-
-    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.run()
-    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
-    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
-    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
-    at.run()
-    next(b for b in at.button if b.label == "Grade").click().run()
-
-    assert not at.exception
-    assert seen["answer_reader"].detect_fractions is False
-
-
-@pytest.mark.slow
-def test_grade_tab_easyocr_detect_fractions_checkbox_enables_it(tmp_path, monkeypatch):
-    db_path = tmp_path / "worksheets.sqlite3"
-    _set_env(monkeypatch, db_path)
-    monkeypatch.setenv("EASYOCR_SERVICE_URL", "http://localhost:8080")
-
-    seen = {}
-
-    def fake_mark_scan(hws, roster, db_path, out_path, on_step=None, name_reader=None, answer_reader=None, response_scorer=None, classroom_id=None, bucket=None, s3_client=None):
-        seen["answer_reader"] = answer_reader
-        return scan_grader.ScanBatchResult()
-
-    monkeypatch.setattr("graderbot.scan_grader.mark_scan", fake_mark_scan)
-
-    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.run()
-    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
-    at.checkbox(key="grade_easyocr_detect_fractions").check().run()
-    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
-    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
-    at.run()
-    next(b for b in at.button if b.label == "Grade").click().run()
-
-    assert not at.exception
-    assert seen["answer_reader"].detect_fractions is True
-
-
-@pytest.mark.slow
-def test_grade_tab_errors_when_easyocr_service_url_is_not_set(tmp_path, monkeypatch):
-    db_path = tmp_path / "worksheets.sqlite3"
-    _set_env(monkeypatch, db_path)
-    monkeypatch.delenv("EASYOCR_SERVICE_URL", raising=False)
-    calls = []
-    monkeypatch.setattr(
-        "graderbot.scan_grader.mark_scan",
-        lambda *args, **kwargs: calls.append(1) or scan_grader.ScanBatchResult(),
-    )
-
-    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.run()
-    at.selectbox(key="grade_answer_source").set_value("EasyOCR").run()
-    uploader = next(fu for fu in at.get("file_uploader") if "Student work" in fu.label)
-    uploader.set_value(("scan.pdf", b"not-a-real-pdf", "application/pdf"))
-    at.run()
-    next(b for b in at.button if b.label == "Grade").click().run()
-
-    assert not at.exception
-    assert not calls
-    assert any("EASYOCR_SERVICE_URL" in e.value for e in at.error)
+    assert source.value == "No OCR (blank detection only)"
 
 
 @pytest.mark.slow
@@ -1252,7 +1124,7 @@ def test_grade_tab_errors_when_google_vision_api_key_is_not_set(tmp_path, monkey
 @pytest.mark.slow
 def test_grade_tab_passes_a_no_ocr_reader_when_selected(tmp_path, monkeypatch):
     # issue #83: selecting "No OCR" needs no API key/service and never fails
-    # to construct, unlike the other three backends.
+    # to construct, unlike Google Cloud Vision.
     db_path = tmp_path / "worksheets.sqlite3"
     _set_env(monkeypatch, db_path)
 

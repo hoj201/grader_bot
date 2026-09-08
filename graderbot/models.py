@@ -19,7 +19,7 @@ class QuestionResult:
     open_ended: bool = False  # True if the question has no single correct answer (issue #65); never graded right/wrong, and markup draws nothing for it
     # Debugging aid for OCR misreads (issue #70): the OCR backend's
     # self-reported confidence for `response`, its raw pre-repair text, and
-    # which backend (Mathpix/EasyOCR) produced it (see ocr.OcrResult). All
+    # which backend produced it (see ocr.OcrResult). All
     # None/"" when the box was never sent to OCR (blank box, issue #66).
     ocr_confidence: Optional[float] = None
     ocr_raw: Optional[str] = None

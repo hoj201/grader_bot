@@ -126,8 +126,8 @@ def _grade_batch(
     (issue #58).
 
     `answer_reader` picks the answer-box OCR backend; it defaults to
-    `MathpixAnswerReader` (see `grade_hw`). Pass an `EasyOcrAnswerReader` to
-    use EasyOCR instead (issue #70).
+    `MathpixAnswerReader` (see `grade_hw`). Pass a `GoogleVisionAnswerReader`
+    or `NoOcrAnswerReader` to use one of those instead (issue #70).
 
     `response_scorer` (issue #81) verifies plain-numeric answers against
     candidates instead of transcribing them; see `grade_hw` for how it and

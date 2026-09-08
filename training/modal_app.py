@@ -2,12 +2,10 @@
 locally -- this dev machine (Intel Mac, Python 3.13) has no torch wheel
 available at all (confirmed directly: `pip install torch` fails outright),
 so local training isn't an option the way it is for a Linux/CUDA machine.
-Mirrors `easyocr_service/modal_app.py`'s image-build pattern, but this is a
-one-off job (`modal run`), not a deployed service (`modal deploy`) -- there
-is nothing here that should run 24/7.
+This is a one-off job (`modal run`), not a deployed service
+(`modal deploy`) -- there is nothing here that should run 24/7.
 
-One-time setup (per Modal workspace), if not already done for
-`easyocr_service`:
+One-time setup (per Modal workspace):
 
     poetry run modal setup
 
@@ -36,7 +34,7 @@ if str(_TRAINING_DIR) not in sys.path:
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
-    .apt_install("libgl1", "libglib2.0-0")  # cv2 runtime libs, same as easyocr_service
+    .apt_install("libgl1", "libglib2.0-0")  # cv2 runtime libs
     .pip_install_from_requirements(str(_TRAINING_DIR / "requirements.txt"))
     .add_local_python_source("model", "dataset", "train", "export_onnx")
     # graderbot itself (answer_glyph_synth, response_candidates,
@@ -49,8 +47,7 @@ image = (
 app = modal.App("graderbot-response-scorer-training", image=image)
 
 # Persists checkpoints across runs/containers so a training run can be
-# resumed or re-exported without starting over -- same rationale as
-# easyocr_service's model-weights Volume.
+# resumed or re-exported without starting over.
 _checkpoint_volume = modal.Volume.from_name("response-scorer-checkpoints", create_if_missing=True)
 
 

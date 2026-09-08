@@ -1,8 +1,7 @@
-# Isolated from the main project's pyproject.toml the same way
-# easyocr_service/requirements.txt is: torch has no Intel-macOS wheel for
-# this project's Python version (confirmed directly -- `pip install torch`
-# fails outright on this dev machine), so it must never become a
-# graderbot dependency. Install with:
+# Isolated from the main project's pyproject.toml: torch has no
+# Intel-macOS wheel for this project's Python version (confirmed directly --
+# `pip install torch` fails outright on this dev machine), so it must never
+# become a graderbot dependency. Install with:
 #
 #     cd training && pip install -r requirements.txt
 #

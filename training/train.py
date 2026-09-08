@@ -9,9 +9,8 @@ main project's (see `model.py`'s docstring for why).
     cd training && pip install -r requirements.txt
     python train.py --steps 20000 --out checkpoint.pt
 
-Or on Modal (`modal_app.py` mirrors `easyocr_service/modal_app.py`'s
-pattern) for compute this repo's own dev machine (Intel Mac, no torch wheel
-available at all) can't provide locally.
+Or on Modal (see `modal_app.py`) for compute this repo's own dev machine
+(Intel Mac, no torch wheel available at all) can't provide locally.
 """
 
 import argparse
