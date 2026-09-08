@@ -3,8 +3,6 @@
 
 - Before implementing new features ask clarifying questions before presenting your approach.
 
-- Every new python routine should have a new pytest. Consider making the unit-test before making the code.
-
 - Run all pytests before ending a work session to make sure you have not broken anything.
 
 # Viewing generated images
