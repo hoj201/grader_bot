@@ -17,6 +17,7 @@ from graderbot.storage import (
     WorksheetRecord,
     _default_s3_client,
     compute_sty_hash,
+    count_all_pending_name_labels,
     count_pending_name_labels,
     delete_from_s3,
     delete_pending_name_label,
@@ -39,6 +40,7 @@ from graderbot.storage import (
     insert_name_image,
     insert_pending_name_label,
     insert_worksheet,
+    list_all_students,
     list_classrooms,
     list_handwriting_labels,
     list_name_images,
@@ -49,6 +51,7 @@ from graderbot.storage import (
     parse_s3_url,
     pending_name_label_exists,
     random_pending_name_label,
+    random_pending_name_label_any,
     record_sty_version,
     serialize_boxes,
     slugify_title,
@@ -963,6 +966,17 @@ def test_list_students_scoped_to_classroom(tmp_path):
     assert names == [("Anna", "Smith")]
 
 
+def test_list_all_students_spans_classrooms(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    get_or_create_student(conn, room_b.id, "Zeke", "Jones")
+
+    names = [(s.first_name, s.last_name) for s in list_all_students(conn)]
+    assert names == [("Anna", "Smith"), ("Zeke", "Jones")]
+
+
 def test_transfer_student_moves_classroom_and_keeps_name_samples(tmp_path):
     conn = init_db(tmp_path / "worksheets.sqlite3")
     room_a = get_or_create_classroom(conn, "Room A")
@@ -1246,6 +1260,35 @@ def test_count_and_random_pending_name_label_scoped_to_classroom(tmp_path):
     assert count_pending_name_labels(conn, room_a.id) == 1
     assert count_pending_name_labels(conn, room_b.id) == 0
     assert random_pending_name_label(conn, room_b.id) is None
+
+
+def test_count_and_random_pending_name_label_any_spans_classrooms(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=room_a.id,
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_a",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=room_b.id,
+            image_s3url="https://bucket.s3.amazonaws.com/b.png",
+            image_sha256="sha_b",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert count_all_pending_name_labels(conn) == 2
+    fetched = random_pending_name_label_any(conn)
+    assert fetched is not None
+    assert fetched.image_sha256 in {"sha_a", "sha_b"}
 
 
 def test_random_pending_name_label_returns_none_when_empty(tmp_path):

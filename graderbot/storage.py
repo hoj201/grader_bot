@@ -495,6 +495,22 @@ def list_students(conn: Connection, classroom_id: int) -> List[StudentRecord]:
     ]
 
 
+def list_all_students(conn: Connection) -> List[StudentRecord]:
+    """Every student across every classroom, ordered by name -- used by the
+    Label Names tab (issue #97), which labels crops against the full
+    roster instead of filtering to one classroom at a time."""
+    rows = conn.execute(
+        """
+        SELECT id, classroom_id, first_name, last_name, nickname
+        FROM STUDENT ORDER BY first_name, last_name
+        """
+    ).fetchall()
+    return [
+        StudentRecord(id=row[0], classroom_id=row[1], first_name=row[2], last_name=row[3], nickname=row[4])
+        for row in rows
+    ]
+
+
 def transfer_student(conn: Connection, student_id: int, new_classroom_id: int) -> StudentRecord:
     """Moves a student to a different classroom (issue #72).
 
@@ -727,6 +743,28 @@ def random_pending_name_label(
         WHERE classroom_id = ? ORDER BY RANDOM() LIMIT 1
         """,
         (classroom_id,),
+    ).fetchone()
+    return _row_to_pending_name_label(row) if row is not None else None
+
+
+def count_all_pending_name_labels(conn: Connection) -> int:
+    """How many crops are queued across every classroom -- the Label Names
+    tab no longer filters by classroom (issue #97), so it shows one total
+    instead of a per-classroom count."""
+    row = conn.execute("SELECT COUNT(*) FROM PENDING_NAME_LABEL").fetchone()
+    return row[0]
+
+
+def random_pending_name_label_any(conn: Connection) -> Optional[PendingNameLabelRecord]:
+    """One pending crop from any classroom, chosen uniformly at random
+    (issue #97: the Label Names tab now draws from a single queue spanning
+    every classroom instead of one classroom at a time), or `None` if the
+    queue is empty."""
+    row = conn.execute(
+        f"""
+        SELECT {', '.join(_PENDING_NAME_LABEL_COLUMNS)} FROM PENDING_NAME_LABEL
+        ORDER BY RANDOM() LIMIT 1
+        """
     ).fetchone()
     return _row_to_pending_name_label(row) if row is not None else None
 
