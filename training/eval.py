@@ -9,11 +9,11 @@ offered as an option in the Grade tab.
 
 Real-scan evaluation -- comparing this synthetic-only accuracy against
 labeled real crops, the number issue #73's paused PyLaia spike lacked and
-that would have caught its domain mismatch sooner -- needs the
-`HANDWRITING_LABEL` storage table and labeling pass from issue #81's "Data
-pipeline" section. That table doesn't exist yet, so this only reports the
-synthetic side for now; extending this script to also read real labels is
-the natural next step once there's a labeled corpus to read.
+that would have caught its domain mismatch sooner -- would need a labeled
+corpus of real crops, which this project doesn't collect (manually
+annotating student handwriting proved unreliable in practice, since
+students write differently on a normal worksheet than on a page asking
+them to copy neatly). This script only reports the synthetic side.
 """
 
 import argparse

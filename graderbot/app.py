@@ -25,8 +25,6 @@ from dotenv import load_dotenv
 from graderbot import embedding, name_classifier, storage
 from graderbot.answer_reader import GoogleVisionAnswerReader, NoOcrAnswerReader
 from graderbot.embedding_viz import build_scatter_df
-from graderbot.handwriting_harvest import harvest_handwriting_labels
-from graderbot.handwriting_sample_worksheets import build_handwriting_sample_worksheet
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
 from graderbot.name_worksheets import generate_name_worksheets
@@ -1298,110 +1296,6 @@ def render_label_names() -> None:
         st.rerun()
 
 
-def render_handwriting_data() -> None:
-    st.write(
-        "Generate a printable worksheet that already shows each answer, so "
-        "students only copy it by hand. Because the printed text *is* the "
-        "answer key, every filled-in box scanned back in is a trustworthy "
-        "(handwriting, text) training sample for the CNN response verifier "
-        "(issue #81) — no manual review or labeling needed, unlike "
-        "`scripts/label_handwriting.py`'s Mathpix-seeded pass."
-    )
-
-    st.subheader("Generate a copy worksheet")
-    count = st.number_input(
-        "Number of items to copy", min_value=1, max_value=200, value=30, key="hw_sample_count"
-    )
-    generate_submitted = st.button("Generate copy worksheet", type="primary")
-
-    if generate_submitted:
-        out = Path("generated") / uuid4().hex[:8] / "handwriting_sample"
-        with st.status("Creating worksheet...", expanded=True) as status:
-            def on_step(msg: str, detail: str | None = None) -> None:
-                status.update(label=msg)
-                st.write(msg)
-                if detail:
-                    st.code(detail, language=None)
-
-            try:
-                _, _, record = build_handwriting_sample_worksheet(
-                    count=int(count),
-                    template_path=TEMPLATE_PATH,
-                    out=out,
-                    bucket=BUCKET,
-                    db_path=DB_PATH,
-                    on_step=on_step,
-                )
-            except CompileError as e:
-                logger.error("handwriting sample worksheet compile failed: %s", e.log_tail)
-                status.update(label="Compilation failed", state="error")
-                st.error(f"LaTeX compilation failed:\n\n{e.log_tail}")
-                return
-            status.update(label="Done", state="complete")
-
-        logger.info("created handwriting sample worksheet id=%s", record.id)
-        st.session_state["hw_sample_flash"] = (
-            f"Created worksheet id={record.id} — download it from the Gallery "
-            "tab, print it, and have students copy each number into the box "
-            "beside it."
-        )
-        st.rerun()
-
-    flash = st.session_state.pop("hw_sample_flash", None)
-    if flash:
-        st.success(flash)
-
-    st.divider()
-    st.subheader("Harvest scanned copy worksheets")
-    st.caption(
-        "Upload a scan of filled-in copy worksheets (generated above, not a "
-        "normal graded worksheet). Every non-blank box becomes a verified "
-        "training label, since the printed answer *is* what the student was "
-        "asked to copy — re-uploading the same scan is safe, already-"
-        "harvested crops are skipped."
-    )
-    uploaded = st.file_uploader(
-        "Scanned copy worksheets (PDF or image)",
-        type=["pdf", "jpg", "jpeg", "png"],
-        key="hw_harvest_upload",
-    )
-    harvest_submitted = st.button("Harvest labels", type="primary", disabled=uploaded is None)
-
-    if harvest_submitted and uploaded is not None:
-        with tempfile.TemporaryDirectory() as tmp:
-            scan_suffix = Path(uploaded.name).suffix or ".pdf"
-            scan_path = Path(tmp) / f"scan{scan_suffix}"
-            scan_path.write_bytes(uploaded.getvalue())
-
-            with st.status("Harvesting labels...", expanded=True) as status:
-                def on_step(msg: str, detail: str | None = None) -> None:
-                    status.update(label=msg)
-                    st.write(msg)
-
-                result = harvest_handwriting_labels(scan_path, DB_PATH, bucket=BUCKET, on_step=on_step)
-                status.update(label="Done", state="complete")
-
-        logger.info(
-            "harvested handwriting labels harvested=%d skipped=%d",
-            len(result.inserted), len(result.skipped),
-        )
-        st.success(f"Harvested {len(result.inserted)} handwriting label(s).")
-        if result.skipped:
-            st.warning(
-                f"{len(result.skipped)} page(s) were skipped:\n"
-                + "\n".join(f"- {r}" for r in result.skipped)
-            )
-
-    st.divider()
-    conn = storage.init_db(DB_PATH)
-    try:
-        total = len(storage.list_handwriting_labels(conn))
-        verified = len(storage.list_handwriting_labels(conn, verified_only=True))
-    finally:
-        conn.close()
-    st.caption(f"{total} labeled handwriting sample(s) so far ({verified} verified).")
-
-
 def main() -> None:
     st.set_page_config(page_title="GraderBot", layout="wide")
     st.title("GraderBot")
@@ -1437,11 +1331,10 @@ def main() -> None:
         roster_tab,
         visualize_tab,
         label_names_tab,
-        handwriting_data_tab,
     ) = st.tabs(
         [
             "Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize",
-            "Label Names", "Handwriting Data",
+            "Label Names",
         ]
     )
     with gallery_tab:
@@ -1458,8 +1351,6 @@ def main() -> None:
         render_visualize()
     with label_names_tab:
         render_label_names()
-    with handwriting_data_tab:
-        render_handwriting_data()
 
 
 if __name__ == "__main__":
