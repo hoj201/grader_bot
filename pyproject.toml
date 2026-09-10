@@ -27,6 +27,11 @@ pytest = "^8.0.0"
 pytest-xdist = "^3.6.0"
 moto = {extras = ["s3"], version = "^5.0.0"}
 modal = "^1.5.4"
+# Only used by scripts/google_drive_oauth_setup.py, a one-time local script
+# for the Grade tab's Drive-link feature (issue #102) -- never imported by
+# graderbot/* production code, which talks to Google over plain `requests`
+# instead (see graderbot/drive_fetch.py).
+google-auth-oauthlib = "^1.2.0"
 
 [tool.pytest.ini_options]
 # The app modules live in the top-level `graderbot` package; add the repo root

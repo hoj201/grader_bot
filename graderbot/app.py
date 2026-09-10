@@ -22,7 +22,7 @@ import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
 
-from graderbot import embedding, name_classifier, storage
+from graderbot import drive_fetch, embedding, name_classifier, storage
 from graderbot.answer_reader import GoogleVisionAnswerReader, NoOcrAnswerReader
 from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
@@ -910,16 +910,28 @@ def _display_name_predictions(result) -> None:
 
 def render_grade() -> None:
     st.write(
-        "Upload one or more PDFs, JPEGs, or PNGs of scanned student work. "
-        "Each page is matched to its worksheet by its QR code, graded "
-        "against the stored answer key, and returned as a single combined "
-        "marked-up PDF plus per-student results."
+        "Upload one or more PDFs, JPEGs, or PNGs of scanned student work, "
+        "or paste Google Drive links below (issue #102). Each page is "
+        "matched to its worksheet by its QR code, graded against the "
+        "stored answer key, and returned as a single combined marked-up "
+        "PDF plus per-student results."
     )
     uploaded = st.file_uploader(
         "Student work (PDF, JPEG, or PNG)",
         type=["pdf", "jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
+    drive_links_raw = st.text_area(
+        "Or paste Google Drive links (one per line)",
+        key="grade_drive_links",
+        help="Links to files shared with the grading account's Google login "
+        "(e.g. https://drive.google.com/file/d/<id>/view). Combined with any "
+        "files uploaded above into one graded batch. Requires "
+        "GOOGLE_OAUTH_CLIENT_ID/GOOGLE_OAUTH_CLIENT_SECRET/"
+        "GOOGLE_OAUTH_REFRESH_TOKEN to be set (see README.md).",
+    )
+    drive_urls = [line.strip() for line in drive_links_raw.splitlines() if line.strip()]
+
     classroom = _select_classroom("grade_classroom", allow_create=False)
     roster = []
     if classroom is not None:
@@ -995,27 +1007,28 @@ def render_grade() -> None:
             "they got right."
         )
 
-    # Multiple uploads are combined into one marked-up PDF (issue #91), so
-    # there's no single upload name left to derive a download filename
-    # from -- ask for one explicitly instead.
+    # Multiple sources (uploads and/or Drive links) are combined into one
+    # marked-up PDF (issue #91), so there's no single source name left to
+    # derive a download filename from -- ask for one explicitly instead.
+    total_sources = len(uploaded or []) + len(drive_urls)
     output_filename = ""
-    if uploaded and len(uploaded) > 1:
+    if total_sources > 1:
         output_filename = st.text_input(
             "Output PDF filename",
             key="grade_output_filename",
-            help="Multiple files were uploaded, so the combined marked-up "
-            "PDF needs an explicit name instead of one derived from a "
-            "single upload.",
+            help="Multiple files/links were provided, so the combined "
+            "marked-up PDF needs an explicit name instead of one derived "
+            "from a single source.",
         )
 
-    filename_ready = not uploaded or len(uploaded) == 1 or bool(output_filename.strip())
+    filename_ready = total_sources <= 1 or bool(output_filename.strip())
     submitted = st.button(
-        "Grade", type="primary", disabled=not uploaded or not filename_ready
+        "Grade", type="primary", disabled=total_sources == 0 or not filename_ready
     )
 
-    if not submitted or not uploaded:
+    if not submitted or total_sources == 0:
         return
-    if len(uploaded) > 1 and not output_filename.strip():
+    if total_sources > 1 and not output_filename.strip():
         st.error("Enter a filename for the combined marked-up PDF.")
         return
 
@@ -1055,15 +1068,42 @@ def render_grade() -> None:
         if model_files_exist():
             response_scorer = CnnResponseScorer()
 
+    access_token = None
+    if drive_urls:
+        try:
+            access_token = drive_fetch.get_access_token()
+        except EnvironmentError as e:
+            st.error(str(e))
+            return
+        except drive_fetch.DriveAuthError as e:
+            st.error(str(e))
+            return
+
     with tempfile.TemporaryDirectory() as tmp:
+        # Collect (name, bytes) for every source -- uploaded files first,
+        # then Drive links -- before writing anything to disk. Drive files
+        # are downloaded eagerly here (not lazily inside the grading loop)
+        # so a bad link fails the whole submission up front rather than
+        # after grading has already started on the good pages.
+        scan_sources: list[tuple[str, bytes]] = [
+            (scan_file.name, scan_file.getvalue()) for scan_file in (uploaded or [])
+        ]
+        for url in drive_urls:
+            try:
+                drive_file = drive_fetch.fetch_drive_file(url, access_token)
+            except drive_fetch.DriveFetchError as e:
+                st.error(f"Could not use Google Drive link {url!r}: {e}")
+                return
+            scan_sources.append((drive_file.filename, drive_file.content))
+
         scan_paths = []
-        for i, scan_file in enumerate(uploaded):
-            scan_suffix = Path(scan_file.name).suffix or ".pdf"
+        for i, (name, content) in enumerate(scan_sources):
+            scan_suffix = Path(name).suffix or ".pdf"
             scan_path = Path(tmp) / f"scan{i}{scan_suffix}"
-            scan_path.write_bytes(scan_file.getvalue())
+            scan_path.write_bytes(content)
             scan_paths.append(scan_path)
         marked_path = Path(tmp) / "marked.pdf"
-        logger.info("grading scan filenames=%s", [f.name for f in uploaded])
+        logger.info("grading scan filenames=%s", [name for name, _ in scan_sources])
 
         with st.status("Grading...", expanded=True) as status:
             def on_step(msg: str, detail: str | None = None) -> None:
@@ -1098,8 +1138,8 @@ def render_grade() -> None:
             st.success(f"Graded {len(graded)} student(s).")
             st.json(graded)
             download_name = (
-                _marked_pdf_filename(uploaded[0].name)
-                if len(uploaded) == 1
+                _marked_pdf_filename(scan_sources[0][0])
+                if total_sources == 1
                 else _ensure_pdf_extension(output_filename)
             )
             st.download_button(

@@ -273,6 +273,59 @@ GOOGLE_VISION_API_KEY=<your-api-key>
 https://cloud.google.com/vision/docs/setup). Works on fly.io as-is, since
 it's a plain HTTPS call.
 
+### Grading from Google Drive links (single-user OAuth, issue #102)
+The Grade tab's "Or paste Google Drive links" textarea lets the app owner
+paste links to files shared only with their own Google account (e.g. a
+school Workspace account) and pulls their bytes into the same grading
+pipeline as uploaded files, combining into one graded batch same as
+multiple uploads. This is single-user by design — there is no per-visitor
+"Sign in with Google" flow and no per-user token storage. Instead, the
+owner runs `scripts/google_drive_oauth_setup.py` once, locally, to complete
+an interactive OAuth consent flow and print a long-lived refresh token,
+which the deployed app then uses silently on every grading run: refreshing
+a short-lived access token as needed via a plain `requests.post` to
+`https://oauth2.googleapis.com/token`, then downloading file bytes via
+`GET https://www.googleapis.com/drive/v3/files/<id>?alt=media`
+(`graderbot/drive_fetch.py`) — no `google-api-python-client`/`google-auth`
+runtime dependency, the same lightweight pattern as `GoogleVisionAnswerReader`
+above. A failed Drive link aborts the whole grading submission with an error
+naming that link, rather than silently grading a partial batch.
+
+**Setup** (see `scripts/google_drive_oauth_setup.py`'s docstring for the
+full walkthrough): in Google Cloud Console, using any personal Google
+account (this does **not** need to be the school account, and does **not**
+need Workspace admin rights), create a project, enable the **Google Drive
+API**, configure an OAuth consent screen (External user type, scope
+`https://www.googleapis.com/auth/drive.readonly`, with the school account
+added as a Test user), and create an OAuth client ID of type **Desktop
+app**. Then run:
+```shell
+poetry install --with dev  # pulls in google-auth-oauthlib, dev-only
+poetry run python scripts/google_drive_oauth_setup.py
+```
+and paste its output into `.env` (local) and `fly secrets set` (production):
+```
+GOOGLE_OAUTH_CLIENT_ID=<your-client-id>
+GOOGLE_OAUTH_CLIENT_SECRET=<your-client-secret>
+GOOGLE_OAUTH_REFRESH_TOKEN=<from the one-time setup script>
+```
+
+**Expect an "Access blocked" screen the first time**, if the Google account
+is managed by an organization (e.g. a school): the org's Workspace admin
+controls which third-party OAuth apps its users may authorize, and a new
+app is blocked by default regardless of who created it. Screenshot that
+page and send it to the school's IT/Workspace admin, asking them to allow
+this app under Admin Console → Security → API Controls → App Access
+Control; once they do, re-run the setup script and the consent flow will
+complete normally.
+
+**Caveat — refresh token lifetime**: while the OAuth consent screen is in
+"Testing" publishing status, Google expires refresh tokens after 7 days —
+re-run the setup script weekly, or promote the consent screen to
+"Production" in Cloud Console to avoid the expiry (tradeoff: a one-time
+"unverified app" warning to click through during setup, since this app will
+never undergo Google's full verification review for a single-user tool).
+
 ### Answer verification: CNN verifier (experimental, issue #81)
 Both backends above transcribe a crop open-vocabulary, with no idea
 what a middle-school worksheet's answer is even supposed to look like. The
@@ -373,8 +426,9 @@ incompatible vectors.
 previously created worksheets and open their student/cv/answer-key PDFs via
 presigned S3 links; **Create**, to generate a new worksheet from a
 prompt (runs the same pipeline as `graderbot.worksheetbot`, including S3 upload +
-DB storage); **Grade**, to upload a PDF of scanned student work and have
-it auto-graded; **Name sheets**, to paste a class roster (one name per line)
+DB storage); **Grade**, to upload a PDF of scanned student work — or paste
+Google Drive links to it (see below) — and have it auto-graded; **Name
+sheets**, to paste a class roster (one name per line)
 and download a printable PDF of name-collection worksheets — one page per
 student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45);
 **Roster**, to ingest those sheets back in and manage a class's students;
