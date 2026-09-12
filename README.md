@@ -396,8 +396,10 @@ the low/no-confidence name crops grading queues up (issue #92, see above).
 Each graded page's QR code is matched to its stored
 worksheet, graded
 against the stored answer key (via `scan_grader.mark_scan`), and returned both
-as per-student JSON results and as a single marked-up PDF (correct answers
-written beside the wrong ones). It requires
+as a per-worksheet participation report -- title plus each classroom's list
+of students (alphabetical by last name) who did it, via
+`scan_grader.participation_report` (issue #107) -- and as a single marked-up
+PDF (correct answers written beside the wrong ones). It requires
 `S3_BUCKET` and `ANTHROPIC_API_KEY` to be set (see
 above); it reads/writes the same `worksheets.sqlite3` database as the CLI by
 default (override with the `WORKSHEETS_DB_PATH` env var). Run it from the repo

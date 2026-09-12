@@ -30,7 +30,7 @@ from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
 from graderbot.name_worksheets import generate_name_worksheets
 from graderbot.response_scorer import CnnResponseScorer, model_files_exist
-from graderbot.scan_grader import mark_scan, results_by_student
+from graderbot.scan_grader import mark_scan, participation_report, results_by_student
 from graderbot.worksheetbot import (
     AVAILABLE_MODELS,
     CompileError,
@@ -914,18 +914,6 @@ def _ensure_pdf_extension(filename: str) -> str:
     return filename if filename.lower().endswith(".pdf") else f"{filename}.pdf"
 
 
-def _display_results(result) -> dict:
-    """Builds the issue-#23 JSON: {student -> {worksheet id -> {question id ->
-    {answer, response, correct}}}}."""
-    return {
-        name: {
-            worksheet_id: {qid: asdict(res) for qid, res in question_results.items()}
-            for worksheet_id, question_results in worksheets.items()
-        }
-        for name, worksheets in results_by_student(result).items()
-    }
-
-
 def _classifier_exists() -> bool:
     """Whether the trained (global, issue #109) handwriting classifier is
     saved."""
@@ -1138,7 +1126,7 @@ def render_grade() -> None:
             )
             status.update(label="Grading complete", state="complete")
 
-        graded = _display_results(result)
+        graded = results_by_student(result)
         logger.info(
             "graded students=%d unreadable=%d unknown_worksheets=%d",
             len(graded), len(result.unreadable), len(result.unknown_worksheets),
@@ -1148,7 +1136,12 @@ def render_grade() -> None:
             st.warning("No pages could be graded from the uploaded scan(s).")
         else:
             st.success(f"Graded {len(graded)} student(s).")
-            st.json(graded)
+            report_conn = storage.init_db(DB_PATH)
+            try:
+                report = participation_report(result, report_conn)
+            finally:
+                report_conn.close()
+            st.json(report)
             download_name = (
                 _marked_pdf_filename(uploaded[0].name)
                 if len(uploaded) == 1

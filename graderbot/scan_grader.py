@@ -35,7 +35,14 @@ from graderbot.pending_name_capture import maybe_capture_pending_name_label
 from graderbot.registration import read_worksheet_id, rectify_to_canonical
 from graderbot.markup import render_marked_page
 from graderbot.response_scorer import ResponseScorer
-from graderbot.storage import deserialize_boxes, get_worksheet_by_public_id, images_to_pdf, init_db
+from graderbot.storage import (
+    deserialize_boxes,
+    get_worksheet_by_public_id,
+    images_to_pdf,
+    init_db,
+    list_all_students,
+    list_classrooms,
+)
 
 _NAME_BOX_ID = "name"
 
@@ -259,6 +266,52 @@ def results_by_student(result: ScanBatchResult) -> Dict[str, Dict[str, StudentRe
         for name, question_results in students.items():
             by_student[name][worksheet_id] = question_results
     return dict(by_student)
+
+
+def participation_report(result: ScanBatchResult, conn: Connection) -> Dict[str, dict]:
+    """Builds the issue-#107 participation report: {worksheet id -> {"title":
+    worksheet title, classroom label -> [student names who did that
+    worksheet, alphabetical by last name]}}.
+
+    Replaces the old per-question score JSON (`_display_results` in the
+    Grade tab, issue #23) as the thing shown after grading -- that output
+    logged every answer's correctness, which turned out to go unused; this
+    logs who did the worksheet instead.
+
+    A graded name is matched to a student by exact "First Last" string
+    match against the roster (the same matching every name reader already
+    does -- there is no student id to fall back on for an OCR read). A name
+    with no matching student -- a blank name box, or a misread that doesn't
+    match anyone -- is silently left out of the report; the Grade tab's
+    unreadable-scan and low-confidence-name warnings already surface those
+    separately. On a name collision across classrooms (two students who
+    share a full name), the first student `list_all_students` returns wins,
+    same ambiguity the roster-matching name readers already have."""
+    classroom_labels = {c.id: c.label for c in list_classrooms(conn)}
+    student_by_name = {}
+    for s in list_all_students(conn):
+        student_by_name.setdefault(f"{s.first_name} {s.last_name}".strip(), s)
+
+    report: Dict[str, dict] = {}
+    for worksheet_id, students in result.results_by_worksheet.items():
+        record = get_worksheet_by_public_id(conn, worksheet_id)
+        by_classroom: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+        for name in students:
+            student = student_by_name.get(name)
+            if student is None:
+                continue
+            label = classroom_labels.get(student.classroom_id)
+            if label is None:
+                continue
+            by_classroom[label].append((student.last_name, name))
+        report[worksheet_id] = {
+            "title": record.title if record is not None else None,
+            **{
+                label: [name for _, name in sorted(entries)]
+                for label, entries in by_classroom.items()
+            },
+        }
+    return report
 
 
 def grade_scans(
