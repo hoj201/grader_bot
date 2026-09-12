@@ -11,11 +11,10 @@ from graderbot.models import Box, QuestionResult
 from graderbot.name_reader import CLASSIFIER_SOURCE, OCR_SOURCE, NameGuess
 from graderbot.scan_grader import grade_scans, mark_scan, results_by_student
 from graderbot.storage import (
-    count_pending_name_labels,
-    get_or_create_classroom,
+    count_all_pending_name_labels,
     init_db,
     insert_worksheet,
-    random_pending_name_label,
+    random_pending_name_label_any,
     serialize_boxes,
 )
 from tests.test_storage import _sample_record
@@ -474,23 +473,18 @@ def test_grade_scans_captures_a_low_confidence_name_crop(
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket="graderbot-test-bucket")
 
-        conn = init_db(db_with_two_worksheets)
-        classroom = get_or_create_classroom(conn, "Room 101")
-        conn.close()
-
         grade_scans(
             ["scan.png"],
             roster=["Alice Smith"],
             db_path=db_with_two_worksheets,
             name_reader=_FixedConfidenceReader("Alice Smith", 0.2),
-            classroom_id=classroom.id,
             bucket="graderbot-test-bucket",
             s3_client=s3,
         )
 
         conn = init_db(db_with_two_worksheets)
-        assert count_pending_name_labels(conn, classroom.id) == 1
-        pending = random_pending_name_label(conn, classroom.id)
+        assert count_all_pending_name_labels(conn) == 1
+        pending = random_pending_name_label_any(conn)
         assert pending.predicted_name == "Alice Smith"
         assert pending.confidence == pytest.approx(0.2)
         assert pending.source == OCR_SOURCE
@@ -504,33 +498,27 @@ def test_grade_scans_does_not_capture_a_confident_name_crop(
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket="graderbot-test-bucket")
 
-        conn = init_db(db_with_two_worksheets)
-        classroom = get_or_create_classroom(conn, "Room 101")
-        conn.close()
-
         grade_scans(
             ["scan.png"],
             roster=["Alice Smith"],
             db_path=db_with_two_worksheets,
             name_reader=_FixedConfidenceReader("Alice Smith", 1.0),
-            classroom_id=classroom.id,
             bucket="graderbot-test-bucket",
             s3_client=s3,
         )
 
         conn = init_db(db_with_two_worksheets)
-        assert count_pending_name_labels(conn, classroom.id) == 0
+        assert count_all_pending_name_labels(conn) == 0
         conn.close()
 
 
-def test_grade_scans_skips_capture_without_a_classroom_id(
+def test_grade_scans_skips_capture_without_a_bucket(
     db_with_two_worksheets, patched_cv
 ):
-    """Capture must stay off by default: with no classroom_id, `_grade_batch`
-    must never try to crop a name box -- verified here via patched_cv, whose
-    scans are bare path strings that would blow up `_crop_box` if capture
-    ran anyway (no bucket/s3_client is passed either, so a bug that dropped
-    only the classroom_id guard would still be caught)."""
+    """Capture must stay off by default: with no bucket, `_grade_batch` must
+    never try to crop a name box -- verified here via patched_cv, whose scans
+    are bare path strings that would blow up `_crop_box` if capture ran
+    anyway."""
     result = grade_scans(
         ["alice.png"],
         roster=["Alice Smith"],

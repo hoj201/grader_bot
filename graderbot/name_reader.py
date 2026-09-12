@@ -6,10 +6,13 @@ Two interchangeable strategies sit behind one `NameReader` protocol:
 - `OcrNameReader` -- Tesseract plus a fuzzy match against the roster. This is
   what grading has always done, and remains the better choice when students
   print their names legibly (or their initials in large caps).
-- `ClassifierNameReader` -- embeds the crop and asks the per-classroom
-  handwriting classifier trained by `name_classifier.train_classroom_classifier`.
-  This is the point of the whole embedding/training pipeline: identify cursive
-  a student writes the same way every week, which OCR reads badly.
+- `ClassifierNameReader` -- embeds the crop and asks the global handwriting
+  classifier trained by `name_classifier.train_global_classifier` (issue #109
+  generalized this from one classifier per classroom to a single model
+  spanning every student, so grading no longer needs a classroom picked
+  first). This is the point of the whole embedding/training pipeline:
+  identify cursive a student writes the same way every week, which OCR reads
+  badly.
 
 Which one grading uses is a runtime choice made in the Grade tab, because real
 per-roster accuracy is not known ahead of time.
@@ -36,7 +39,7 @@ from graderbot.embedding import Embedder, default_embedder
 from graderbot.imaging import crop_name_box, is_blank
 from graderbot.models import Box
 from graderbot.ocr import _BOX_INSET, extract_name_scored
-from graderbot.storage import init_db, list_students
+from graderbot.storage import init_db, list_all_students
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +92,9 @@ class OcrNameReader:
 
 
 class ClassifierNameReader:
-    """Predicts the student from the handwriting itself, using a classroom's
-    trained classifier over embedded name crops."""
+    """Predicts the student from the handwriting itself, using the one
+    trained classifier (issue #109) over embedded name crops -- spanning
+    every student across every classroom."""
 
     def __init__(
         self,
@@ -111,22 +115,21 @@ class ClassifierNameReader:
             )
 
     @classmethod
-    def from_classroom(
+    def from_saved_model(
         cls,
         db_path: Union[str, Path],
-        classroom_id: int,
         bucket: str,
         embedder: Optional[Embedder] = None,
         s3_client=None,
     ) -> Optional["ClassifierNameReader"]:
-        """Build a reader from the classroom's saved model, or return `None` if
-        no model has been trained for it yet. Raises `ValueError` if a model
-        exists but was trained with a different embedder."""
+        """Build a reader from the saved global model (issue #109), or return
+        `None` if no model has been trained yet. Raises `ValueError` if a
+        model exists but was trained with a different embedder."""
         # Imported here rather than at module scope: name_classifier pulls in
         # sklearn/joblib, which grading shouldn't pay for on the OCR path.
         from graderbot import name_classifier
 
-        key = name_classifier.classifier_key(classroom_id)
+        key = name_classifier.GLOBAL_CLASSIFIER_KEY
         try:
             classifier = name_classifier.load_classifier(bucket, key, s3_client)
         except Exception:
@@ -134,13 +137,13 @@ class ClassifierNameReader:
             # failure to fetch means "no usable model", which the caller
             # reports rather than silently grading with the wrong strategy.
             # Logged because a credentials/network failure looks identical to
-            # an untrained classroom from the outside.
+            # an untrained model from the outside.
             logger.warning("could not load classifier %s", key, exc_info=True)
             return None
 
         conn = init_db(Path(db_path))
         try:
-            students = list_students(conn, classroom_id)
+            students = list_all_students(conn)
         finally:
             conn.close()
         names_by_id = {s.id: f"{s.first_name} {s.last_name}".strip() for s in students}

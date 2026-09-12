@@ -113,11 +113,16 @@ class PendingNameLabelRecord:
     data `ingest_name_sheets` produces, just sourced from real graded scans
     instead of dedicated name-collection sheets. A row is deleted once
     resolved (assigned or discarded), so this table only ever holds the
-    current queue, not a permanent history."""
-    classroom_id: int
+    current queue, not a permanent history.
+
+    `classroom_id` is optional (issue #109): grading no longer has a "current
+    classroom" to tag a capture with now that the name classifier is trained
+    globally, so new rows are captured with it unset. It is kept only for the
+    legacy per-classroom queries below and any pre-#109 rows still around."""
     image_s3url: str
     image_sha256: str
     box_id: str = "name"
+    classroom_id: Optional[int] = None
     predicted_name: Optional[str] = None
     confidence: Optional[float] = None
     source: Optional[str] = None
@@ -235,12 +240,14 @@ def init_db(db_path: Path) -> Connection:
     # A low/no-confidence name-box crop captured during grading (issue #92),
     # queued for a human to assign to the right student in the "Label names"
     # tab. Deleted once resolved (assigned or discarded) -- this table only
-    # ever holds the current queue.
+    # ever holds the current queue. classroom_id is nullable (issue #109):
+    # grading no longer has a classroom to tag a capture with once the name
+    # classifier stops being scoped to one.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS PENDING_NAME_LABEL (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            classroom_id INTEGER NOT NULL REFERENCES CLASSROOM(id),
+            classroom_id INTEGER REFERENCES CLASSROOM(id),
             box_id TEXT,
             image_s3url TEXT,
             image_sha256 TEXT,
@@ -251,6 +258,43 @@ def init_db(db_path: Path) -> Connection:
         )
         """
     )
+    # A pre-issue-#109 database still has classroom_id NOT NULL -- SQLite
+    # can't drop a column constraint in place, so rebuild the table the way
+    # its own docs recommend (create the new shape, copy the data, swap
+    # names). Guarded on the actual constraint (not just table existence) so
+    # this runs at most once per database.
+    pending_columns = list(conn.execute("PRAGMA table_info(PENDING_NAME_LABEL)"))
+    classroom_id_col = next(
+        (col for col in pending_columns if col[1] == "classroom_id"), None
+    )
+    if classroom_id_col is not None and classroom_id_col[3]:  # notnull flag
+        conn.execute(
+            """
+            CREATE TABLE PENDING_NAME_LABEL_NEW (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                classroom_id INTEGER REFERENCES CLASSROOM(id),
+                box_id TEXT,
+                image_s3url TEXT,
+                image_sha256 TEXT,
+                predicted_name TEXT,
+                confidence REAL,
+                source TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO PENDING_NAME_LABEL_NEW
+                (id, classroom_id, box_id, image_s3url, image_sha256,
+                 predicted_name, confidence, source, created_at)
+            SELECT id, classroom_id, box_id, image_s3url, image_sha256,
+                   predicted_name, confidence, source, created_at
+            FROM PENDING_NAME_LABEL
+            """
+        )
+        conn.execute("DROP TABLE PENDING_NAME_LABEL")
+        conn.execute("ALTER TABLE PENDING_NAME_LABEL_NEW RENAME TO PENDING_NAME_LABEL")
     columns = {row[1] for row in conn.execute("PRAGMA table_info(WORKSHEET)")}
     if "git_sha" in columns:
         conn.execute("ALTER TABLE WORKSHEET DROP COLUMN git_sha")
@@ -632,6 +676,17 @@ def embeddings_fingerprint(conn: Connection, classroom_id: int) -> Tuple[int, in
         WHERE s.classroom_id = ?
         """,
         (classroom_id,),
+    ).fetchone()
+    return (row[0], row[1])
+
+
+def all_embeddings_fingerprint(conn: Connection) -> Tuple[int, int]:
+    """`(count, max_id)` across every NAME_EMBEDDINGS row, regardless of
+    classroom -- the global-classifier counterpart of `embeddings_fingerprint`
+    (issue #109), used by the Visualize tab's incremental cache now that it
+    inspects every student's embeddings at once instead of one classroom's."""
+    row = conn.execute(
+        "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM NAME_EMBEDDINGS"
     ).fetchone()
     return (row[0], row[1])
 

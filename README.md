@@ -51,15 +51,17 @@ stored.
 ### Schema (ERD)
 All the tables live in the one SQLite DB created by `init_db` (`storage.py`).
 `CLASSROOM`/`STUDENT`/`NAME_IMAGES`/`NAME_EMBEDDINGS`/`PENDING_NAME_LABEL` form
-the roster/name-classifier chain (issues #2/#43/#46/#92); `WORKSHEET`,
-`STY_VERSION`, and `MATHPIX_CALL` are standalone. The
+the roster/name-classifier chain (issues #2/#43/#46/#92), though the trained
+classifier itself is no longer scoped to a `CLASSROOM` (issue #109 -- see
+"Handwriting name classifier" below); `WORKSHEET`, `STY_VERSION`, and
+`MATHPIX_CALL` are standalone. The
 `WORKSHEET.sty_hash -> STY_VERSION.hash` link is a convention followed in code
 (`record_sty_version`), not a SQLite `FOREIGN KEY` constraint.
 
 ```mermaid
 erDiagram
     CLASSROOM ||--o{ STUDENT : enrolls
-    CLASSROOM ||--o{ PENDING_NAME_LABEL : "queues crops for"
+    CLASSROOM |o--o{ PENDING_NAME_LABEL : "queues crops for (optional, issue #109)"
     STUDENT ||--o{ NAME_IMAGES : "has samples"
     STUDENT ||--o{ NAME_EMBEDDINGS : "has embeddings"
     NAME_IMAGES ||--o| NAME_EMBEDDINGS : "embedded as"
@@ -95,7 +97,7 @@ erDiagram
     }
     PENDING_NAME_LABEL {
         int id PK
-        int classroom_id FK
+        int classroom_id FK "nullable, issue #109"
         string box_id
         string image_s3url
         string image_sha256
@@ -322,17 +324,21 @@ model couldn't resolve (see the paused `handwriting-ctc-match` spike, issue
 ### Handwriting name classifier
 Students are identified on a scanned worksheet either by OCR'ing the name box
 or by recognizing their handwriting. The handwriting path (issue #2) runs
-end to end through the Streamlit app:
+end to end through the Streamlit app. Classrooms are still how the **Roster**
+and **Name sheets** tabs organize students for ingest, but the trained
+classifier itself is a single model spanning every classroom (issue #109) —
+grading and the **Visualize** tab no longer ask which class you're working
+with:
 
 1. **Name sheets** tab — print one name-collection page per student.
 2. **Roster** tab — upload the scanned sheets. `ingest_name_sheets` crops each
    handwriting sample to S3 + the `NAME_IMAGES` table, then `vectorize_samples`
    embeds each crop into `NAME_EMBEDDINGS`.
 3. **Visualize** tab — "Evaluate classifier" runs leave-one-out
-   cross-validation per student (worth checking before trusting it), and
-   "Train classifier" fits the model and saves it to
-   `name_classifier/<classroom id>.joblib` in S3. **Retrain after ingesting new
-   name sheets** — the saved model does not update on its own.
+   cross-validation over every student across every classroom (worth checking
+   before trusting it), and "Train classifier" fits one model on all of them
+   and saves it to `name_classifier/global.joblib` in S3. **Retrain after
+   ingesting new name sheets** — the saved model does not update on its own.
 4. **Grade** tab — the "Read student names with" dropdown picks between the
    trained classifier and OCR for that run, and the results table shows which
    name was read off each page and how confident the reader was, so a doubtful

@@ -13,15 +13,15 @@ from sklearn.neighbors import KNeighborsClassifier
 from graderbot.embedding import LocalEmbedder
 from graderbot.name_classifier import (
     DEFAULT_CLASSIFIER_KEY,
-    classifier_key,
+    GLOBAL_CLASSIFIER_KEY,
     load_classifier,
     logistic_regression_factory,
     loo_cross_validate,
     loo_cross_validate_augmented,
     loo_cross_validate_from_db,
     save_classifier,
-    train_classroom_classifier,
     train_from_db,
+    train_global_classifier,
     train_name_classifier,
 )
 from graderbot.storage import (
@@ -186,19 +186,14 @@ def _store_vector(conn, s3, student_id: int, vector: np.ndarray, tag: str) -> No
     )
 
 
-def test_classifier_key_is_per_classroom():
-    assert classifier_key(7) == "name_classifier/7.joblib"
-    assert classifier_key(7) != classifier_key(8)
-
-
 # An embedder whose dim matches the 8-wide vectors `_labelled_vectors` builds,
-# so train_classroom_classifier's dim filter keeps them.
+# so train_global_classifier's dim filter keeps them.
 def _eight_dim_embedder():
     return LocalEmbedder(size=(2, 4))
 
 
 @mock_aws
-def test_train_classroom_classifier_saves_and_reports(tmp_path):
+def test_train_global_classifier_saves_and_reports(tmp_path):
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
@@ -217,9 +212,7 @@ def test_train_classroom_classifier_saves_and_reports(tmp_path):
     _store_vector(conn, s3, solo.id, vectors[0], "solo")
     conn.close()
 
-    report = train_classroom_classifier(
-        db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
-    )
+    report = train_global_classifier(db_path, BUCKET, embedder=_eight_dim_embedder(), s3_client=s3)
 
     assert report.n_samples == 11
     assert report.n_students == 3
@@ -227,16 +220,18 @@ def test_train_classroom_classifier_saves_and_reports(tmp_path):
     assert report.discarded_wrong_dim == 0
     assert report.students_with_no_samples == ["Nora None"]
     assert report.students_with_one_sample == ["Solo One"]
-    assert report.s3_url.endswith(classifier_key(classroom.id))
+    assert report.s3_url.endswith(GLOBAL_CLASSIFIER_KEY)
 
-    # The model actually landed at the per-classroom key and predicts student ids.
-    loaded = load_classifier(BUCKET, classifier_key(classroom.id), s3_client=s3)
+    # The model actually landed at the global key and predicts student ids.
+    loaded = load_classifier(BUCKET, GLOBAL_CLASSIFIER_KEY, s3_client=s3)
     assert set(loaded.classes_.tolist()) == {anna.id, zeke.id, solo.id}
     assert loaded.predict(vectors[:1])[0] == anna.id
 
 
 @mock_aws
-def test_train_classroom_classifier_ignores_other_classrooms(tmp_path):
+def test_train_global_classifier_spans_every_classroom(tmp_path):
+    """issue #109: one classifier trained over every classroom's students,
+    not just one."""
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
@@ -244,23 +239,21 @@ def test_train_classroom_classifier_ignores_other_classrooms(tmp_path):
     room_a = get_or_create_classroom(conn, "Room A")
     room_b = get_or_create_classroom(conn, "Room B")
     anna = get_or_create_student(conn, room_a.id, "Anna", "Smith")
-    other = get_or_create_student(conn, room_b.id, "Zeke", "Jones")
+    zeke = get_or_create_student(conn, room_b.id, "Zeke", "Jones")
     vectors, _ = _labelled_vectors()
     _store_vector(conn, s3, anna.id, vectors[0], "a")
-    _store_vector(conn, s3, other.id, vectors[-1], "b")
+    _store_vector(conn, s3, zeke.id, vectors[-1], "b")
     conn.close()
 
-    report = train_classroom_classifier(
-        db_path, BUCKET, room_a.id, embedder=_eight_dim_embedder(), s3_client=s3
-    )
+    report = train_global_classifier(db_path, BUCKET, embedder=_eight_dim_embedder(), s3_client=s3)
 
-    assert report.n_samples == 1
-    loaded = load_classifier(BUCKET, classifier_key(room_a.id), s3_client=s3)
-    assert loaded.classes_.tolist() == [anna.id]
+    assert report.n_samples == 2
+    loaded = load_classifier(BUCKET, GLOBAL_CLASSIFIER_KEY, s3_client=s3)
+    assert set(loaded.classes_.tolist()) == {anna.id, zeke.id}
 
 
 @mock_aws
-def test_train_classroom_classifier_skips_other_embedders_vectors(tmp_path):
+def test_train_global_classifier_skips_other_embedders_vectors(tmp_path):
     """Vectors left behind by a previous embedder are excluded, and counted."""
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
@@ -273,16 +266,14 @@ def test_train_classroom_classifier_skips_other_embedders_vectors(tmp_path):
     _store_vector(conn, s3, anna.id, np.zeros(4096, dtype=np.float32), "stale")
     conn.close()
 
-    report = train_classroom_classifier(
-        db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
-    )
+    report = train_global_classifier(db_path, BUCKET, embedder=_eight_dim_embedder(), s3_client=s3)
 
     assert report.n_samples == 1
     assert report.discarded_wrong_dim == 1
 
 
 @mock_aws
-def test_train_classroom_classifier_without_usable_vectors_raises(tmp_path):
+def test_train_global_classifier_without_usable_vectors_raises(tmp_path):
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
@@ -292,9 +283,7 @@ def test_train_classroom_classifier_without_usable_vectors_raises(tmp_path):
     conn.close()
 
     with pytest.raises(ValueError, match="no 8-dimensional handwriting embeddings"):
-        train_classroom_classifier(
-            db_path, BUCKET, classroom.id, embedder=_eight_dim_embedder(), s3_client=s3
-        )
+        train_global_classifier(db_path, BUCKET, embedder=_eight_dim_embedder(), s3_client=s3)
 
 
 def test_loo_cross_validate_scores_well_separated_clusters_perfectly():

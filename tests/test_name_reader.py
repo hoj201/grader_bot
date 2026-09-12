@@ -15,7 +15,7 @@ from graderbot.name_reader import (
     NameGuess,
     OcrNameReader,
 )
-from graderbot.name_classifier import classifier_key, train_name_classifier
+from graderbot.name_classifier import GLOBAL_CLASSIFIER_KEY, train_name_classifier
 from graderbot.storage import get_or_create_classroom, get_or_create_student, init_db
 
 BUCKET = "grader-handwriting"
@@ -232,7 +232,7 @@ def test_classifier_name_reader_uses_predict_proba_when_absent():
 
 
 # --------------------------------------------------------------------------
-# ClassifierNameReader.from_classroom
+# ClassifierNameReader.from_saved_model
 
 
 def _seed_classroom(db_path):
@@ -245,7 +245,7 @@ def _seed_classroom(db_path):
 
 
 @mock_aws
-def test_from_classroom_loads_the_saved_model_and_roster(tmp_path):
+def test_from_saved_model_loads_the_saved_model_and_roster(tmp_path):
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
@@ -253,10 +253,10 @@ def test_from_classroom_loads_the_saved_model_and_roster(tmp_path):
 
     vectors = np.array([[1.0, 0.0], [1.0, 0.01], [0.0, 1.0], [0.01, 1.0]], dtype=np.float32)
     clf = train_name_classifier(vectors, np.array([anna.id, anna.id, zeke.id, zeke.id]))
-    name_classifier.save_classifier(clf, BUCKET, classifier_key(classroom.id), s3_client=s3)
+    name_classifier.save_classifier(clf, BUCKET, GLOBAL_CLASSIFIER_KEY, s3_client=s3)
 
-    reader = ClassifierNameReader.from_classroom(
-        db_path, classroom.id, BUCKET, embedder=_FakeEmbedder([[1.0, 0.0]]), s3_client=s3
+    reader = ClassifierNameReader.from_saved_model(
+        db_path, BUCKET, embedder=_FakeEmbedder([[1.0, 0.0]]), s3_client=s3
     )
 
     assert reader is not None
@@ -266,39 +266,36 @@ def test_from_classroom_loads_the_saved_model_and_roster(tmp_path):
 
 
 @mock_aws
-def test_from_classroom_returns_none_when_untrained(tmp_path):
+def test_from_saved_model_returns_none_when_untrained(tmp_path):
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
-    classroom, _, _ = _seed_classroom(db_path)
+    _seed_classroom(db_path)
 
-    assert (
-        ClassifierNameReader.from_classroom(db_path, classroom.id, BUCKET, s3_client=s3)
-        is None
-    )
+    assert ClassifierNameReader.from_saved_model(db_path, BUCKET, s3_client=s3) is None
 
 
 @mock_aws
-def test_from_classroom_reads_only_its_own_classrooms_model(tmp_path):
+def test_from_saved_model_includes_students_from_every_classroom(tmp_path):
+    """issue #109: the saved model and its roster span every classroom, not
+    just one."""
     s3 = boto3.client("s3", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
     db_path = tmp_path / "db.sqlite3"
-    classroom, anna, zeke = _seed_classroom(db_path)
     conn = init_db(db_path)
-    other = get_or_create_classroom(conn, "Room 202")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    anna = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    zeke = get_or_create_student(conn, room_b.id, "Zeke", "Jones")
     conn.close()
 
     vectors = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     clf = train_name_classifier(vectors, np.array([anna.id, zeke.id]))
-    name_classifier.save_classifier(clf, BUCKET, classifier_key(classroom.id), s3_client=s3)
+    name_classifier.save_classifier(clf, BUCKET, GLOBAL_CLASSIFIER_KEY, s3_client=s3)
 
-    # Room 101 has a model; Room 202 does not, and must not borrow it.
-    assert (
-        ClassifierNameReader.from_classroom(
-            db_path, classroom.id, BUCKET, embedder=_FakeEmbedder([[1.0, 0.0]]), s3_client=s3
-        )
-        is not None
+    reader = ClassifierNameReader.from_saved_model(
+        db_path, BUCKET, embedder=_FakeEmbedder([[1.0, 0.0]]), s3_client=s3
     )
-    assert (
-        ClassifierNameReader.from_classroom(db_path, other.id, BUCKET, s3_client=s3) is None
-    )
+
+    assert reader is not None
+    assert reader.names_by_id == {anna.id: "Anna Smith", zeke.id: "Zeke Jones"}

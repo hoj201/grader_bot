@@ -15,6 +15,7 @@ from graderbot.storage import (
     PendingNameLabelRecord,
     WorksheetRecord,
     _default_s3_client,
+    all_embeddings_fingerprint,
     compute_sty_hash,
     count_all_pending_name_labels,
     count_pending_name_labels,
@@ -1097,6 +1098,95 @@ def test_transfer_student_changes_embeddings_fingerprint_of_both_classrooms(tmp_
     assert after_a[0] == 0
     assert after_b != before_b
     assert after_b[0] == 1
+
+
+def test_all_embeddings_fingerprint_spans_every_classroom(tmp_path):
+    """issue #109: the global classifier's cache key counts every student's
+    embeddings at once, not one classroom's."""
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    anna = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    zeke = get_or_create_student(conn, room_b.id, "Zeke", "Jones")
+
+    assert all_embeddings_fingerprint(conn) == (0, 0)
+
+    for i, student in enumerate((anna, zeke)):
+        image_id = insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=student.id,
+                box_id="name1",
+                image_s3url=f"https://bucket.s3.amazonaws.com/img{i}.png",
+                image_sha256=f"sha{i}",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        insert_name_embedding(
+            conn,
+            NameEmbeddingRecord(
+                student_id=student.id,
+                name_image_id=image_id,
+                embedding_s3url=f"https://bucket.s3.amazonaws.com/vec{i}.npy",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    count, max_id = all_embeddings_fingerprint(conn)
+    assert count == 2
+    assert max_id > 0
+
+
+def test_init_db_migrates_pending_name_label_classroom_id_to_nullable(tmp_path):
+    """A pre-issue-#109 database has classroom_id NOT NULL; init_db must
+    rebuild the table (SQLite can't relax a column constraint in place) so a
+    classroom-less capture can be inserted, without losing existing rows."""
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE PENDING_NAME_LABEL (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            classroom_id INTEGER NOT NULL,
+            box_id TEXT,
+            image_s3url TEXT,
+            image_sha256 TEXT,
+            predicted_name TEXT,
+            confidence REAL,
+            source TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO PENDING_NAME_LABEL
+            (classroom_id, box_id, image_s3url, image_sha256, predicted_name,
+             confidence, source, created_at)
+        VALUES (1, 'name', 'https://bucket.s3.amazonaws.com/a.png', 'sha_a',
+                'Alice Smith', 0.2, 'ocr', '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+
+    pre_existing = next(
+        row for row in conn.execute("SELECT image_sha256, classroom_id FROM PENDING_NAME_LABEL")
+    )
+    assert pre_existing == ("sha_a", 1)
+
+    # A classroom-less capture must now be insertable.
+    new_id = insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            image_s3url="https://bucket.s3.amazonaws.com/b.png",
+            image_sha256="sha_b",
+        ),
+    )
+    assert new_id is not None
+    assert count_all_pending_name_labels(conn) == 2
 
 
 def test_import_students_csv_adds_students_with_nickname_column(tmp_path):

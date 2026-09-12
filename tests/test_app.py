@@ -850,11 +850,11 @@ def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, mon
 
 
 @pytest.mark.slow
-def test_roster_tab_transfer_student_warns_to_retrain_classifiers(tmp_path, monkeypatch):
-    """issue #104: a transfer changes both classrooms' rosters, so the
-    per-classroom trained classifier (a separate saved artifact, issue #58)
-    is now stale for both -- nudge the user to retrain instead of leaving it
-    to the README."""
+def test_roster_tab_transfer_student_does_not_warn_to_retrain(tmp_path, monkeypatch):
+    """issue #109: the trained classifier now spans every classroom, so a
+    transfer (which only moves the STUDENT row, not their handwriting
+    samples) no longer invalidates it -- unlike issue #104, back when the
+    classifier was per-classroom."""
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
     room_a = storage.get_or_create_classroom(conn, "Room A")
@@ -870,9 +870,9 @@ def test_roster_tab_transfer_student_warns_to_retrain_classifiers(tmp_path, monk
     next(b for b in at.button if b.label == "Confirm").click().run()
 
     assert not at.exception
-    warnings = " ".join(w.value for w in at.warning)
-    assert "Room A" in warnings and "Room B" in warnings
-    assert "retrain" in warnings.lower()
+    assert not at.warning
+    successes = " ".join(s.value for s in at.success)
+    assert "Transferred Anna Smith to Room B" in successes
 
 
 @pytest.mark.slow
@@ -961,18 +961,18 @@ def _patch_embeddings(monkeypatch, student_id):
 @pytest.mark.slow
 def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
-    classroom, anna = _seed_classroom(db_path)
+    _, anna = _seed_classroom(db_path)
     _set_env(monkeypatch, db_path)
     _patch_embeddings(monkeypatch, anna.id)
 
     train_calls = []
     monkeypatch.setattr(
-        "graderbot.name_classifier.train_classroom_classifier",
+        "graderbot.name_classifier.train_global_classifier",
         lambda *args, **kwargs: train_calls.append((args, kwargs))
         or name_classifier.TrainingReport(
             n_samples=9,
             n_students=2,
-            s3_url="https://bucket.s3.amazonaws.com/name_classifier/1.joblib",
+            s3_url="https://bucket.s3.amazonaws.com/name_classifier/global.joblib",
             embedding_dim=1024,
             discarded_wrong_dim=3,
             students_with_no_samples=["Nora None"],
@@ -987,11 +987,11 @@ def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
 
     assert not at.exception
     assert len(train_calls) == 1
-    # Trained for the selected classroom, not the whole database.
-    assert train_calls[0][0][2] == classroom.id
+    # No classroom argument (issue #109): trained over the whole database.
+    assert train_calls[0][0] == (Path(db_path), "bucket")
 
     successes = " ".join(s.value for s in at.success)
-    assert "9 sample(s)" in successes and "name_classifier/1.joblib" in successes
+    assert "9 sample(s)" in successes and "name_classifier/global.joblib" in successes
     warnings = " ".join(w.value for w in at.warning)
     assert "Nora None" in warnings
     assert "Solo One" in warnings
@@ -1006,10 +1006,10 @@ def test_visualize_tab_train_classifier_surfaces_missing_data(tmp_path, monkeypa
     _patch_embeddings(monkeypatch, anna.id)
 
     def raise_no_data(*args, **kwargs):
-        raise ValueError("no 1024-dimensional handwriting embeddings for classroom 1")
+        raise ValueError("no 1024-dimensional handwriting embeddings")
 
     monkeypatch.setattr(
-        "graderbot.name_classifier.train_classroom_classifier", raise_no_data
+        "graderbot.name_classifier.train_global_classifier", raise_no_data
     )
 
     at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
@@ -1063,7 +1063,7 @@ def test_grade_tab_passes_a_classifier_reader_when_selected(tmp_path, monkeypatc
 
     sentinel = object()
     monkeypatch.setattr(
-        "graderbot.name_reader.ClassifierNameReader.from_classroom",
+        "graderbot.name_reader.ClassifierNameReader.from_saved_model",
         classmethod(lambda cls, *args, **kwargs: sentinel),
     )
     seen = {}
@@ -1095,7 +1095,7 @@ def test_grade_tab_errors_rather_than_silently_using_ocr(tmp_path, monkeypatch):
     _set_env(monkeypatch, db_path)
     _patch_saved_classifier(monkeypatch, exists=True)
     monkeypatch.setattr(
-        "graderbot.name_reader.ClassifierNameReader.from_classroom",
+        "graderbot.name_reader.ClassifierNameReader.from_saved_model",
         classmethod(lambda cls, *args, **kwargs: None),
     )
     calls = []
