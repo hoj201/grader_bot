@@ -5,6 +5,14 @@ The dataset is tiny (~10 samples per student) and each class is one student's ow
 handwriting of their own name, so a k-nearest-neighbours classifier over the
 embedding vectors is a good fit. The trained model is serialized with joblib and
 stored in S3 at a caller-chosen key so grading can fetch it later.
+
+Per-student sample counts are often wildly imbalanced -- a longtime student
+may have 20 labeled crops while a newly-added one has 1 (issue #110's
+harvesting fix helps collect that student's images, but doesn't change how
+the classifier weighs them). The default KNN factory below votes by
+inverse-distance rather than a plain majority, so a query near a low-sample
+student's own (few) points isn't automatically outvoted by a populous
+student's more numerous but farther-away neighbors.
 """
 
 import io
@@ -48,7 +56,13 @@ ClassifierFactory = Callable[[int], BaseEstimator]
 
 
 def _default_classifier_factory(n_neighbors: int) -> ClassifierFactory:
-    return lambda n_samples: KNeighborsClassifier(n_neighbors=min(n_neighbors, n_samples))
+    # weights="distance" (rather than sklearn's uniform-vote default) so a
+    # student with only 1-2 samples can still win their own close
+    # neighborhood instead of being outvoted by a populous student's
+    # farther-away points (class-imbalance mitigation, see module docstring).
+    return lambda n_samples: KNeighborsClassifier(
+        n_neighbors=min(n_neighbors, n_samples), weights="distance"
+    )
 
 
 def logistic_regression_factory(C: float = 1.0, max_iter: int = 1000) -> ClassifierFactory:
