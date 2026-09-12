@@ -29,6 +29,7 @@ from graderbot.embedding_viz import build_scatter_df
 from graderbot.name_dataset import ingest_name_sheets
 from graderbot.name_reader import ClassifierNameReader
 from graderbot.name_worksheets import generate_name_worksheets
+from graderbot.pending_name_capture import MIN_NAME_IMAGES_PER_STUDENT
 from graderbot.response_scorer import CnnResponseScorer, model_files_exist
 from graderbot.scan_grader import mark_scan, participation_report, results_by_student
 from graderbot.worksheetbot import (
@@ -1219,8 +1220,14 @@ def render_label_names() -> None:
     classifier's training data (the same NAME_IMAGES table
     `ingest_name_sheets` writes to) and embeds it immediately, so it's
     ready to use the next time the Visualize tab retrains. Tasks are
-    served one at a time, chosen uniformly at random, per issue #92's "for
-    the moment" scope.
+    served one at a time, by default chosen uniformly at random across the
+    whole queue (issue #92's "for the moment" scope) -- which, during
+    issue #110's roster-wide bootstrap capture, can bury a single
+    under-represented student's crops under everyone else's. A "Review
+    queue for" filter plus a per-student coverage expander (issue #110
+    follow-up) let a teacher deliberately draw from one student's guessed
+    crops instead of waiting on the random draw, filtering on the reader's
+    (possibly wrong) guess since real identity isn't known pre-labelling.
     """
     st.write(
         "Grading a scan sometimes reads a student's name with low or no "
@@ -1235,6 +1242,8 @@ def render_label_names() -> None:
         classrooms = storage.list_classrooms(conn)
         students = storage.list_all_students(conn)
         pending_count = storage.count_all_pending_name_labels(conn)
+        name_image_counts = storage.count_name_images_by_student(conn)
+        pending_counts_by_name = storage.pending_name_label_counts_by_predicted_name(conn)
     finally:
         conn.close()
 
@@ -1249,17 +1258,69 @@ def render_label_names() -> None:
         name = f"{s.first_name} {s.last_name}".strip()
         return f"{name} ({classroom_labels.get(s.classroom_id, '?')})"
 
+    # Coverage view (issue #110 follow-up): the random draw below spans the
+    # whole queue, so a student who's rare in it (e.g. one new student among
+    # 60) can take a long time to come up by chance even though every one of
+    # their crops was captured. Surfacing each student's progress here, plus
+    # a way to jump straight to a specific student's crops, hands that
+    # judgment call to the teacher instead of an automatic priority scheme.
+    with st.expander("Student coverage", expanded=False):
+        for s in students:
+            full_name = f"{s.first_name} {s.last_name}".strip()
+            have = name_image_counts.get(s.id, 0)
+            queued = pending_counts_by_name.get(full_name, 0)
+            status = "OK" if have >= MIN_NAME_IMAGES_PER_STUDENT else "needs more"
+            st.write(
+                f"{student_label(s)} -- {have}/{MIN_NAME_IMAGES_PER_STUDENT} samples "
+                f"({status}), {queued} crop(s) queued"
+            )
+
+    # Students with at least one crop currently guessed as them -- the only
+    # ones worth offering in the "review for a specific student" filter,
+    # since picking anyone else would just draw nothing.
+    filterable_students = [s for s in students if pending_counts_by_name.get(
+        f"{s.first_name} {s.last_name}".strip(), 0
+    ) > 0]
+    any_option = "Any (random)"
+    filter_options = [any_option] + [student_label(s) for s in filterable_students]
+    # The set of filterable students shrinks as their crops get resolved, so
+    # a filter selection from a previous run can fall out of the options
+    # list (e.g. it was that student's last queued crop) -- reset to "Any"
+    # rather than letting a stale session_state value that's no longer a
+    # valid option raise inside st.selectbox.
+    if st.session_state.get("label_names_filter") not in filter_options:
+        st.session_state["label_names_filter"] = any_option
+    filter_choice = st.selectbox(
+        "Review queue for",
+        filter_options,
+        key="label_names_filter",
+        help=(
+            "Filters by the reader's guess, not verified identity -- a "
+            "student's crop that got misread as someone else won't show up "
+            "under their own name."
+        ),
+    )
+
     # Stash the crop currently on screen in session_state so it survives
     # the rerun every widget interaction triggers within this run (same
     # pattern as ai_preview in _render_create_ai) -- otherwise a fresh
     # random pick on every rerun would swap out the crop from under the
     # selectbox/buttons below. No longer keyed by classroom (issue #97):
-    # there's a single queue spanning every classroom now.
-    state_key = "label_names_pending"
+    # there's a single queue spanning every classroom now. Keyed by the
+    # filter choice too, so switching "Review queue for" draws a fresh crop
+    # from the newly-selected subset instead of showing a stale one.
+    state_key = f"label_names_pending_{filter_choice}"
     if state_key not in st.session_state:
         conn = storage.init_db(DB_PATH)
         try:
-            st.session_state[state_key] = storage.random_pending_name_label_any(conn)
+            if filter_choice == any_option:
+                st.session_state[state_key] = storage.random_pending_name_label_any(conn)
+            else:
+                student = next(s for s in filterable_students if student_label(s) == filter_choice)
+                predicted_name = f"{student.first_name} {student.last_name}".strip()
+                st.session_state[state_key] = storage.random_pending_name_label_for_predicted_name(
+                    conn, predicted_name
+                )
         finally:
             conn.close()
 

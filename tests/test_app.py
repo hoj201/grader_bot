@@ -1,3 +1,4 @@
+import io
 import logging
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import boto3
 import numpy as np
 import pytest
 from moto import mock_aws
+from PIL import Image
 from streamlit.testing.v1 import AppTest
 
 from graderbot import app, name_classifier, scan_grader, storage
@@ -873,6 +875,77 @@ def test_roster_tab_transfer_student_does_not_warn_to_retrain(tmp_path, monkeypa
     assert not at.warning
     successes = " ".join(s.value for s in at.success)
     assert "Transferred Anna Smith to Room B" in successes
+
+
+@pytest.mark.slow
+def test_label_names_tab_shows_coverage_with_empty_queue(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    room_a = storage.get_or_create_classroom(conn, "Room A")
+    storage.get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    storage.get_or_create_student(conn, room_a.id, "Bob", "Jones")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.session_state["active_tab"] = "Label Names"
+    at.run()
+
+    assert not at.exception
+    successes = " ".join(s.value for s in at.success)
+    assert "No crops waiting for review right now." in successes
+    markdown_texts = " ".join(md.value for md in at.markdown)
+    assert "Anna Smith (Room A) -- 0/5 samples (needs more), 0 crop(s) queued" in markdown_texts
+    assert "Bob Jones (Room A) -- 0/5 samples (needs more), 0 crop(s) queued" in markdown_texts
+    # Nobody has a queued crop yet, so the filter offers nothing but "Any".
+    filter_box = next(sb for sb in at.selectbox if sb.key == "label_names_filter")
+    assert filter_box.options == ["Any (random)"]
+
+
+@mock_aws
+@pytest.mark.slow
+def test_label_names_tab_filter_narrows_to_predicted_student(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    room_a = storage.get_or_create_classroom(conn, "Room A")
+    storage.get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    storage.insert_pending_name_label(
+        conn,
+        storage.PendingNameLabelRecord(
+            classroom_id=room_a.id,
+            image_s3url="https://bucket.s3.amazonaws.com/pending_name_labels/sha_a.png",
+            image_sha256="sha_a",
+            predicted_name="Anna Smith",
+            confidence=0.2,
+            source="classifier",
+            created_at="2026-09-12T00:00:00+00:00",
+        ),
+    )
+    conn.close()
+    _set_env(monkeypatch, db_path)
+    s3_client = boto3.client("s3", region_name="us-east-1")
+    s3_client.create_bucket(Bucket="bucket")
+    png_bytes = io.BytesIO()
+    Image.new("RGB", (4, 4), color="white").save(png_bytes, format="PNG")
+    s3_client.put_object(
+        Bucket="bucket", Key="pending_name_labels/sha_a.png", Body=png_bytes.getvalue()
+    )
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.session_state["active_tab"] = "Label Names"
+    at.run()
+
+    assert not at.exception
+    filter_box = next(sb for sb in at.selectbox if sb.key == "label_names_filter")
+    assert filter_box.options == ["Any (random)", "Anna Smith (Room A)"]
+    assert at.image[0].captions == ["Best guess: Anna Smith (classifier, 20%)"]
+
+    filter_box.set_value("Anna Smith (Room A)").run()
+
+    assert not at.exception
+    # Still the same (only) crop, now drawn from the filtered subset.
+    assert at.image[0].captions == ["Best guess: Anna Smith (classifier, 20%)"]
+    assert not at.success  # "No crops waiting" would only show if the filter drew nothing
 
 
 @pytest.mark.slow

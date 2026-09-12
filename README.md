@@ -352,11 +352,20 @@ with:
    instead (issue #110) — a classifier that has never seen a student can
    still read their crop "confidently" as someone else, so relying on
    confidence alone would never surface that student's crops for labelling.
-5. **Label Names** tab — works through that queue one crop at a time (chosen
-   uniformly at random), showing the reader's own guess as a hint. Assigning
-   the right student inserts a `NAME_IMAGES` row and immediately embeds it
-   (same as step 2), so it's ready the next time step 3 retrains; "Discard"
-   drops an unusable crop instead.
+5. **Label Names** tab — works through that queue one crop at a time (by
+   default chosen uniformly at random), showing the reader's own guess as a
+   hint. Assigning the right student inserts a `NAME_IMAGES` row and
+   immediately embeds it (same as step 2), so it's ready the next time step
+   3 retrains; "Discard" drops an unusable crop instead. Because step 4's
+   bootstrap capture queues every student's crops indiscriminately while
+   *any* student is under quota, one under-represented student's crops can
+   be a small fraction of a large queue and take a while to come up by
+   chance. A "Student coverage" expander shows each student's progress
+   toward the quota and how many queued crops currently guess them, and a
+   "Review queue for" filter lets a teacher draw only from one student's
+   guessed crops instead of waiting on the random draw — filtered on the
+   reader's guess, not verified identity, so it can still miss a crop that
+   got misread as someone else.
 
 `vectorize_samples` (see [embedding.py](./graderbot/embedding.py)) chooses its
 embedder from the `NAME_EMBEDDER` env var:

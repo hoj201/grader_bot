@@ -18,6 +18,7 @@ from graderbot.storage import (
     all_embeddings_fingerprint,
     compute_sty_hash,
     count_all_pending_name_labels,
+    count_name_images_by_student,
     count_pending_name_labels,
     delete_from_s3,
     delete_pending_name_label,
@@ -46,9 +47,11 @@ from graderbot.storage import (
     list_worksheets,
     name_image_exists,
     parse_s3_url,
+    pending_name_label_counts_by_predicted_name,
     pending_name_label_exists,
     random_pending_name_label,
     random_pending_name_label_any,
+    random_pending_name_label_for_predicted_name,
     record_sty_version,
     roster_needs_more_name_images,
     serialize_boxes,
@@ -1483,6 +1486,84 @@ def test_count_and_random_pending_name_label_any_spans_classrooms(tmp_path):
     fetched = random_pending_name_label_any(conn)
     assert fetched is not None
     assert fetched.image_sha256 in {"sha_a", "sha_b"}
+
+
+def test_random_pending_name_label_for_predicted_name_filters(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room A")
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=classroom.id,
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_a",
+            predicted_name="Alice Smith",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=classroom.id,
+            image_s3url="https://bucket.s3.amazonaws.com/b.png",
+            image_sha256="sha_b",
+            predicted_name="Bob Jones",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    fetched = random_pending_name_label_for_predicted_name(conn, "Alice Smith")
+    assert fetched is not None
+    assert fetched.image_sha256 == "sha_a"
+
+    assert random_pending_name_label_for_predicted_name(conn, "Nobody Here") is None
+
+    assert pending_name_label_counts_by_predicted_name(conn) == {
+        "Alice Smith": 1,
+        "Bob Jones": 1,
+    }
+
+
+def test_pending_name_label_counts_by_predicted_name_omits_unpredicted(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room A")
+    insert_pending_name_label(
+        conn,
+        PendingNameLabelRecord(
+            classroom_id=classroom.id,
+            image_s3url="https://bucket.s3.amazonaws.com/a.png",
+            image_sha256="sha_a",
+            predicted_name=None,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    assert pending_name_label_counts_by_predicted_name(conn) == {}
+
+
+def test_count_name_images_by_student(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room A")
+    alice = get_or_create_student(conn, classroom.id, "Alice", "Smith")
+    bob = get_or_create_student(conn, classroom.id, "Bob", "Jones")
+
+    assert count_name_images_by_student(conn) == {}
+
+    for i in range(2):
+        insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=alice.id,
+                box_id=f"name{i}",
+                image_s3url=f"https://bucket.s3.amazonaws.com/{i}.png",
+                image_sha256=f"sha_alice_{i}",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    counts = count_name_images_by_student(conn)
+    assert counts == {alice.id: 2}
+    assert counts.get(bob.id, 0) == 0
 
 
 def test_random_pending_name_label_returns_none_when_empty(tmp_path):

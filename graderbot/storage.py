@@ -627,6 +627,22 @@ def roster_needs_more_name_images(conn: Connection, min_images: int) -> bool:
     return row is not None
 
 
+def count_name_images_by_student(conn: Connection) -> Dict[int, int]:
+    """Confirmed `NAME_IMAGES` row count per student id, across every
+    classroom. Students with zero samples are omitted (callers already have
+    the full roster via `list_all_students`/`list_students` and can treat a
+    missing key as 0) -- used by the Label Names tab's coverage view (issue
+    #110 follow-up) to show each student's progress toward
+    `pending_name_capture.MIN_NAME_IMAGES_PER_STUDENT` alongside the review
+    queue, instead of leaving that only inferable from
+    `roster_needs_more_name_images`'s yes/no.
+    """
+    rows = conn.execute(
+        "SELECT student_id, COUNT(*) FROM NAME_IMAGES GROUP BY student_id"
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
 _NAME_IMAGE_COLUMNS = (
     "id", "student_id", "box_id", "image_s3url", "image_sha256", "created_at",
 )
@@ -818,6 +834,44 @@ def random_pending_name_label_any(conn: Connection) -> Optional[PendingNameLabel
         """
     ).fetchone()
     return _row_to_pending_name_label(row) if row is not None else None
+
+
+def random_pending_name_label_for_predicted_name(
+    conn: Connection, predicted_name: str
+) -> Optional[PendingNameLabelRecord]:
+    """Like `random_pending_name_label_any`, but restricted to crops whose
+    `predicted_name` exactly matches -- lets the Label Names tab's "review
+    for a specific student" filter deliberately surface a lagging student's
+    crops instead of waiting for them to come up by chance in the full
+    queue. `predicted_name` is only the reader's guess, not verified
+    identity, so this can still miss a crop of this student that got
+    misread as someone else -- same caveat as the queue's default-selection
+    guess."""
+    row = conn.execute(
+        f"""
+        SELECT {', '.join(_PENDING_NAME_LABEL_COLUMNS)} FROM PENDING_NAME_LABEL
+        WHERE predicted_name = ?
+        ORDER BY RANDOM() LIMIT 1
+        """,
+        (predicted_name,),
+    ).fetchone()
+    return _row_to_pending_name_label(row) if row is not None else None
+
+
+def pending_name_label_counts_by_predicted_name(conn: Connection) -> Dict[str, int]:
+    """How many queued crops are currently guessed as each name (crops with
+    no guess at all -- `predicted_name IS NULL` -- are omitted). Used by the
+    Label Names tab to know which students are worth offering in the
+    "review for a specific student" filter, and to show how many candidate
+    crops are waiting for each."""
+    rows = conn.execute(
+        """
+        SELECT predicted_name, COUNT(*) FROM PENDING_NAME_LABEL
+        WHERE predicted_name IS NOT NULL
+        GROUP BY predicted_name
+        """
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
 
 
 def delete_pending_name_label(conn: Connection, pending_id: int) -> None:
