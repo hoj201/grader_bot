@@ -23,6 +23,7 @@ from graderbot.storage import (
     delete_student,
     delete_worksheet,
     deserialize_boxes,
+    embeddings_fingerprint,
     generate_answer_key_pdf,
     generate_presigned_url,
     get_or_create_classroom,
@@ -439,6 +440,10 @@ def test_default_s3_client_uses_aws_region_env_var(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-2")
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
 
+    # _default_s3_client is process-wide @lru_cache'd (issue: Label Names tab
+    # slowness -- a fresh client per call was the dominant per-click cost);
+    # the autouse fixture in conftest.py clears it around every test so a
+    # stale client can't hide this env var actually being read.
     client = _default_s3_client()
 
     assert client.meta.region_name == "us-east-2"
@@ -1046,6 +1051,52 @@ def test_transfer_student_is_idempotent_when_already_in_target_classroom(tmp_pat
 
     assert transferred.classroom_id == room.id
     assert [s.id for s in list_students(conn, room.id)] == [student.id]
+
+
+def test_transfer_student_changes_embeddings_fingerprint_of_both_classrooms(tmp_path):
+    """issue #104: `embeddings_fingerprint` joins NAME_EMBEDDINGS through the
+    student's *current* classroom_id, so a transferred student's samples
+    should immediately count toward the destination classroom's fingerprint
+    and drop out of the source's -- this is what lets the Visualize tab's
+    cache (`app._cached_training_vectors`) notice a transfer and reload
+    instead of serving stale vectors under the old classroom."""
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room A")
+    room_b = get_or_create_classroom(conn, "Room B")
+    student = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    image_id = insert_name_image(
+        conn,
+        NameImageRecord(
+            student_id=student.id,
+            box_id="name1",
+            image_s3url="https://bucket.s3.amazonaws.com/img.png",
+            image_sha256="sha123",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    insert_name_embedding(
+        conn,
+        NameEmbeddingRecord(
+            student_id=student.id,
+            name_image_id=image_id,
+            embedding_s3url="https://bucket.s3.amazonaws.com/vec.npy",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+    before_a = embeddings_fingerprint(conn, room_a.id)
+    before_b = embeddings_fingerprint(conn, room_b.id)
+    assert before_a[0] == 1
+    assert before_b[0] == 0
+
+    transfer_student(conn, student.id, room_b.id)
+
+    after_a = embeddings_fingerprint(conn, room_a.id)
+    after_b = embeddings_fingerprint(conn, room_b.id)
+    assert after_a != before_a
+    assert after_a[0] == 0
+    assert after_b != before_b
+    assert after_b[0] == 1
 
 
 def test_import_students_csv_adds_students_with_nickname_column(tmp_path):

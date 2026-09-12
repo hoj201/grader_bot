@@ -18,6 +18,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import anthropic
+import numpy as np
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
@@ -328,6 +329,19 @@ def render_roster() -> None:
                             )
                             st.session_state.pop(transfer_confirm_key, None)
                             st.session_state.pop(transfer_target_key, None)
+                            # The trained name classifier is a separate saved
+                            # artifact per classroom (issue #58) that doesn't
+                            # update on its own -- a transfer changes both
+                            # rosters, so nudge retraining explicitly instead
+                            # of leaving it to the README (issue #104).
+                            st.session_state["roster_flash"] = [(
+                                "warning",
+                                f"Transferred {label} to {target.label}. The "
+                                f"name classifier for {classroom.label} and "
+                                f"{target.label} was trained on the old "
+                                "rosters -- retrain both from the Visualize "
+                                "tab before relying on it.",
+                            )]
                             st.rerun()
                     if no.button("Cancel", key=f"cancel_transfer_student_{student.id}",
                                  use_container_width=True):
@@ -374,26 +388,74 @@ def render_roster() -> None:
                         st.rerun()
 
 
-@st.cache_data(show_spinner=False)
+def _concat_vectors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """`np.concatenate` that tolerates the empty `(0, 0)` array
+    `embedding.load_training_vectors` returns for "no rows" -- a plain
+    `np.concatenate([a, b])` raises on that since its column count doesn't
+    match a real `(n, d)` array's."""
+    if a.size == 0:
+        return b
+    if b.size == 0:
+        return a
+    return np.concatenate([a, b])
+
+
 def _cached_training_vectors(
     db_path_str: str, bucket: str | None, classroom_id: int, dim: int | None, fingerprint
 ):
-    """Cached `embedding.load_training_vectors`, keyed (in part) on
-    `fingerprint` -- a classroom's `storage.embeddings_fingerprint`.
+    """Incrementally-cached `embedding.load_training_vectors`, keyed (in
+    part) on `fingerprint` -- a classroom's `storage.embeddings_fingerprint`
+    (`(count, max_id)`).
 
     Streamlit reruns every tab's code top-to-bottom on *any* widget
     interaction anywhere in the app, not just the tab you're looking at
-    (`st.tabs` is a display-only grouping). Without this cache, every
-    handwriting-sample embedding for whichever classroom happens to be
-    selected here gets re-downloaded from S3, one object at a time, on every
-    single click in the app -- including "Assign" on the Label Names tab,
-    which is what made it feel like the whole database was reloading from
-    scratch. `fingerprint` changing is what invalidates this: a plain
-    `st.cache_data` without it would instead go stale and hide newly
-    embedded samples."""
-    return embedding.load_training_vectors(
+    (`st.tabs` is a display-only grouping), so this runs on every single
+    click in the app -- including "Assign" on the Label Names tab. A plain
+    `st.cache_data` keyed on `fingerprint` avoids re-downloading on clicks
+    that don't add an embedding, but still re-downloads *every* vector in
+    the classroom the moment one does (`fingerprint` changing invalidates
+    the whole cache entry) -- exactly the case Assign hits every time, so a
+    classroom with a few hundred embeddings still saw a very visible ~1.5s
+    hitch on every single label. This instead keeps the previous result in
+    `session_state` and, when only new rows were appended (checked via
+    `min_id`+count rather than assumed), fetches and appends just those.
+    A row deletion (e.g. deleting a student) changes the count without
+    raising `max_id` past what's cached, which is detected below and falls
+    back to a full reload rather than silently drifting out of sync."""
+    count, max_id = fingerprint
+    cache = st.session_state.setdefault("_training_vectors_cache", {})
+    cache_key = (db_path_str, bucket, classroom_id, dim)
+    cached = cache.get(cache_key)
+
+    if cached is not None and cached["count"] == count and cached["max_id"] == max_id:
+        return cached["vectors"], cached["student_ids"], cached["name_image_ids"], cached["n_discarded"]
+
+    if cached is not None and max_id > cached["max_id"]:
+        new_vectors, new_student_ids, new_name_image_ids, new_discarded = (
+            embedding.load_training_vectors(
+                Path(db_path_str), bucket=bucket, classroom_id=classroom_id, dim=dim,
+                min_id=cached["max_id"],
+            )
+        )
+        if cached["count"] + new_vectors.shape[0] + new_discarded == count:
+            result = (
+                _concat_vectors(cached["vectors"], new_vectors),
+                np.concatenate([cached["student_ids"], new_student_ids]),
+                np.concatenate([cached["name_image_ids"], new_name_image_ids]),
+                cached["n_discarded"] + new_discarded,
+            )
+            cache[cache_key] = {"count": count, "max_id": max_id, "vectors": result[0],
+                                 "student_ids": result[1], "name_image_ids": result[2],
+                                 "n_discarded": result[3]}
+            return result
+
+    vectors, student_ids, name_image_ids, n_discarded = embedding.load_training_vectors(
         Path(db_path_str), bucket=bucket, classroom_id=classroom_id, dim=dim
     )
+    cache[cache_key] = {"count": count, "max_id": max_id, "vectors": vectors,
+                         "student_ids": student_ids, "name_image_ids": name_image_ids,
+                         "n_discarded": n_discarded}
+    return vectors, student_ids, name_image_ids, n_discarded
 
 
 def render_visualize() -> None:
@@ -1263,10 +1325,18 @@ def render_label_names() -> None:
         st.success("No crops waiting for review right now.")
         return
 
-    bucket_name, key = storage.parse_s3_url(pending.image_s3url)
-    image_bytes = storage._default_s3_client().get_object(
-        Bucket=bucket_name, Key=key
-    )["Body"].read()
+    # Cache the fetched crop bytes per pending.id so re-running this tab's
+    # code (every widget interaction anywhere in the app triggers a rerun,
+    # per the _cached_training_vectors note above) doesn't re-download the
+    # same unchanged image from S3 every time -- that redundant fetch was
+    # both slow and made st.image visibly flicker on every interaction.
+    bytes_key = f"label_names_pending_bytes_{pending.id}"
+    if bytes_key not in st.session_state:
+        bucket_name, key = storage.parse_s3_url(pending.image_s3url)
+        st.session_state[bytes_key] = storage._default_s3_client().get_object(
+            Bucket=bucket_name, Key=key
+        )["Body"].read()
+    image_bytes = st.session_state[bytes_key]
     caption = (
         f"Best guess: {pending.predicted_name} ({pending.source}, {pending.confidence:.0%})"
         if pending.predicted_name
@@ -1319,6 +1389,7 @@ def render_label_names() -> None:
             "labeled pending name crop id=%s student=%s", pending.id, student.id,
         )
         st.session_state.pop(state_key, None)
+        st.session_state.pop(bytes_key, None)
         st.rerun()
 
     if discard_col.button("Discard", key=f"label_names_discard_{pending.id}"):
@@ -1329,10 +1400,12 @@ def render_label_names() -> None:
             conn.close()
         logger.info("discarded pending name crop id=%s", pending.id)
         st.session_state.pop(state_key, None)
+        st.session_state.pop(bytes_key, None)
         st.rerun()
 
     if skip_col.button("Skip for now", key=f"label_names_skip_{pending.id}"):
         st.session_state.pop(state_key, None)
+        st.session_state.pop(bytes_key, None)
         st.rerun()
 
 
@@ -1363,33 +1436,39 @@ def main() -> None:
         st.error("S3_BUCKET is not set. Configure it in .env before using this app.")
         st.stop()
 
-    (
-        gallery_tab,
-        create_tab,
-        grade_tab,
-        names_tab,
-        roster_tab,
-        visualize_tab,
-        label_names_tab,
-    ) = st.tabs(
-        [
-            "Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize",
-            "Label Names",
-        ]
+    # A plain st.tabs() runs *every* tab's body on *every* rerun -- st.tabs
+    # is a display-only grouping (all bodies execute; only the CSS hides the
+    # inactive ones), and Streamlit reruns the whole script on any widget
+    # interaction anywhere in the app. That's what made Label Names feel
+    # slow no matter how much caching went into the other tabs: clicking
+    # "Assign" there still paid for Gallery generating presigned URLs for
+    # every worksheet, Visualize rebuilding its 3D scatter plot, etc. every
+    # single time. st.segmented_control (unlike st.tabs) is just a normal
+    # widget -- its value lives in session_state like any other -- so an
+    # if/elif on it lets only the *active* tab's render_*() actually run.
+    tab_names = [
+        "Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize",
+        "Label Names",
+    ]
+    active_tab = st.segmented_control(
+        "Navigation", tab_names, default=tab_names[0], required=True,
+        label_visibility="collapsed", key="active_tab",
     )
-    with gallery_tab:
+    st.divider()
+
+    if active_tab == "Gallery":
         render_gallery()
-    with create_tab:
+    elif active_tab == "Create":
         render_create()
-    with grade_tab:
+    elif active_tab == "Grade":
         render_grade()
-    with names_tab:
+    elif active_tab == "Name sheets":
         render_name_sheets()
-    with roster_tab:
+    elif active_tab == "Roster":
         render_roster()
-    with visualize_tab:
+    elif active_tab == "Visualize":
         render_visualize()
-    with label_names_tab:
+    elif active_tab == "Label Names":
         render_label_names()
 
 

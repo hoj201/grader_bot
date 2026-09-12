@@ -404,6 +404,7 @@ def load_training_vectors(
     s3_client=None,
     classroom_id: Optional[int] = None,
     dim: Optional[int] = None,
+    min_id: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Load NAME_EMBEDDINGS vectors from S3. Returns `(vectors, student_ids,
     name_image_ids, n_discarded)`: `vectors` is `(n, d)` float32,
@@ -421,7 +422,12 @@ def load_training_vectors(
     LocalEmbedder (4096), HOGEmbedder (3780) and Voyage (1024) all embed to
     distinct sizes, length is a reliable stand-in for "which embedder produced
     this" here; it would stop being one if two embedders ever shared a size.
-    With `dim=None` nothing is filtered and a mixed collection still raises."""
+    With `dim=None` nothing is filtered and a mixed collection still raises.
+
+    `min_id` restricts to rows with `NAME_EMBEDDINGS.id > min_id`, so a caller
+    that already has every row up to some id (the Visualize tab's incremental
+    cache, keyed on `storage.embeddings_fingerprint`) can fetch only what's
+    new instead of re-downloading the whole classroom from S3 every time."""
     bucket = _resolve_bucket(bucket)
     client = _default_client(s3_client)
     conn = init_db(db_path)
@@ -429,12 +435,17 @@ def load_training_vectors(
         query = (
             "SELECT e.student_id, e.name_image_id, e.embedding_s3url FROM NAME_EMBEDDINGS e"
         )
-        params: Tuple = ()
+        clauses = []
+        params: List = []
         if classroom_id is not None:
-            query += (
-                " JOIN STUDENT s ON s.id = e.student_id WHERE s.classroom_id = ?"
-            )
-            params = (classroom_id,)
+            query += " JOIN STUDENT s ON s.id = e.student_id"
+            clauses.append("s.classroom_id = ?")
+            params.append(classroom_id)
+        if min_id is not None:
+            clauses.append("e.id > ?")
+            params.append(min_id)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
