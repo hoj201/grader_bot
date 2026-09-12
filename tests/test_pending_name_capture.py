@@ -8,6 +8,7 @@ from moto import mock_aws
 
 from graderbot.pending_name_capture import (
     LOW_CONFIDENCE_THRESHOLD,
+    MIN_NAME_IMAGES_PER_STUDENT,
     maybe_capture_pending_name_label,
 )
 from graderbot.storage import (
@@ -167,6 +168,48 @@ def test_maybe_capture_skips_a_crop_already_labeled_as_a_name_image(tmp_path, s3
     assert result is None
     assert count_all_pending_name_labels(conn) == 0
     assert not pending_name_label_exists(conn, pending.image_sha256)
+
+
+def test_maybe_capture_ignores_confidence_when_a_student_is_below_quota(tmp_path, s3_client):
+    # issue #110: a classifier that has never seen "Ben Jones" can still
+    # confidently misread his crop as someone it does know, so while any
+    # student is below the quota, confidence must not gate capture.
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    get_or_create_student(conn, classroom.id, "Ben", "Jones")
+
+    result = maybe_capture_pending_name_label(
+        conn, _written_crop(), "Alice Smith",
+        LOW_CONFIDENCE_THRESHOLD, "classifier", bucket=_BUCKET, s3_client=s3_client,
+    )
+
+    assert result is not None
+    assert count_all_pending_name_labels(conn) == 1
+
+
+def test_maybe_capture_resumes_confidence_gating_once_quota_is_met(tmp_path, s3_client):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    for i in range(MIN_NAME_IMAGES_PER_STUDENT):
+        insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=student.id,
+                box_id=f"name{i}",
+                image_s3url=f"https://bucket.s3.amazonaws.com/img{i}.png",
+                image_sha256=f"sha-{i}",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+    result = maybe_capture_pending_name_label(
+        conn, _written_crop(), "Anna Smith",
+        LOW_CONFIDENCE_THRESHOLD, "classifier", bucket=_BUCKET, s3_client=s3_client,
+    )
+
+    assert result is None
+    assert count_all_pending_name_labels(conn) == 0
 
 
 def test_maybe_capture_swallows_errors_and_warns(tmp_path, s3_client):

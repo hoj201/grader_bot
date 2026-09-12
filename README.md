@@ -345,7 +345,13 @@ with:
    read can be checked by hand (issue #58). Every page whose name-read
    confidence falls below `pending_name_capture.LOW_CONFIDENCE_THRESHOLD`
    (0.5) has its name-box crop queued for the **Label Names** tab below
-   (issue #92), instead of that read simply going unchecked.
+   (issue #92), instead of that read simply going unchecked. While any
+   student (in any classroom) has fewer than
+   `pending_name_capture.MIN_NAME_IMAGES_PER_STUDENT` (5) labelled
+   `NAME_IMAGES`, confidence is ignored and every name-box crop is queued
+   instead (issue #110) — a classifier that has never seen a student can
+   still read their crop "confidently" as someone else, so relying on
+   confidence alone would never surface that student's crops for labelling.
 5. **Label Names** tab — works through that queue one crop at a time (chosen
    uniformly at random), showing the reader's own guess as a hint. Assigning
    the right student inserts a `NAME_IMAGES` row and immediately embeds it

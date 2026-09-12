@@ -603,6 +603,30 @@ def name_image_exists(conn: Connection, image_sha256: str) -> bool:
     return row is not None
 
 
+def roster_needs_more_name_images(conn: Connection, min_images: int) -> bool:
+    """True if any student, in any classroom, has fewer than `min_images`
+    NAME_IMAGES rows (a brand-new student with zero counts as needing more).
+
+    Used by `pending_name_capture` (issue #110): while this is true the
+    handwriting classifier can't have every student in its ontology yet, so
+    it can't be trusted to flag which crops are worth labelling -- a crop
+    from an under-represented student may come back confidently misread as
+    someone else instead of tripping the low-confidence check. Harvesting
+    switches to capturing every crop uniformly at random until every
+    student clears the quota, rather than depending on classifier
+    confidence from the start.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM STUDENT s
+        WHERE (SELECT COUNT(*) FROM NAME_IMAGES ni WHERE ni.student_id = s.id) < ?
+        LIMIT 1
+        """,
+        (min_images,),
+    ).fetchone()
+    return row is not None
+
+
 _NAME_IMAGE_COLUMNS = (
     "id", "student_id", "box_id", "image_s3url", "image_sha256", "created_at",
 )
