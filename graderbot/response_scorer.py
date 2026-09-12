@@ -237,7 +237,7 @@ class CnnResponseScorer:
     in `__init__`, so constructing (but never calling) a `CnnResponseScorer`
     costs nothing extra on a grading run that ends up using a different
     `response_scorer`/none at all. Same lazy pattern as
-    `name_reader.ClassifierNameReader.from_classroom`'s `name_classifier`
+    `name_reader.ClassifierNameReader.from_saved_model`'s `name_classifier`
     import.
     """
 

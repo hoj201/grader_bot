@@ -329,18 +329,15 @@ def render_roster() -> None:
                             )
                             st.session_state.pop(transfer_confirm_key, None)
                             st.session_state.pop(transfer_target_key, None)
-                            # The trained name classifier is a separate saved
-                            # artifact per classroom (issue #58) that doesn't
-                            # update on its own -- a transfer changes both
-                            # rosters, so nudge retraining explicitly instead
-                            # of leaving it to the README (issue #104).
+                            # The trained name classifier spans every
+                            # classroom (issue #109), so a transfer -- which
+                            # only moves the STUDENT row, not their
+                            # handwriting samples -- doesn't invalidate it;
+                            # no retrain nudge needed (unlike issue #104,
+                            # back when the classifier was per-classroom).
                             st.session_state["roster_flash"] = [(
-                                "warning",
-                                f"Transferred {label} to {target.label}. The "
-                                f"name classifier for {classroom.label} and "
-                                f"{target.label} was trained on the old "
-                                "rosters -- retrain both from the Visualize "
-                                "tab before relying on it.",
+                                "success",
+                                f"Transferred {label} to {target.label}.",
                             )]
                             st.rerun()
                     if no.button("Cancel", key=f"cancel_transfer_student_{student.id}",
@@ -401,30 +398,31 @@ def _concat_vectors(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _cached_training_vectors(
-    db_path_str: str, bucket: str | None, classroom_id: int, dim: int | None, fingerprint
+    db_path_str: str, bucket: str | None, dim: int | None, fingerprint
 ):
     """Incrementally-cached `embedding.load_training_vectors`, keyed (in
-    part) on `fingerprint` -- a classroom's `storage.embeddings_fingerprint`
-    (`(count, max_id)`).
+    part) on `fingerprint` -- `storage.all_embeddings_fingerprint`'s
+    `(count, max_id)` across every student (issue #109: the classifier and
+    this Visualize tab both stopped being scoped to one classroom).
 
     Streamlit reruns every tab's code top-to-bottom on *any* widget
     interaction anywhere in the app, not just the tab you're looking at
     (`st.tabs` is a display-only grouping), so this runs on every single
     click in the app -- including "Assign" on the Label Names tab. A plain
     `st.cache_data` keyed on `fingerprint` avoids re-downloading on clicks
-    that don't add an embedding, but still re-downloads *every* vector in
-    the classroom the moment one does (`fingerprint` changing invalidates
-    the whole cache entry) -- exactly the case Assign hits every time, so a
-    classroom with a few hundred embeddings still saw a very visible ~1.5s
-    hitch on every single label. This instead keeps the previous result in
-    `session_state` and, when only new rows were appended (checked via
-    `min_id`+count rather than assumed), fetches and appends just those.
-    A row deletion (e.g. deleting a student) changes the count without
-    raising `max_id` past what's cached, which is detected below and falls
-    back to a full reload rather than silently drifting out of sync."""
+    that don't add an embedding, but still re-downloads *every* vector the
+    moment one does (`fingerprint` changing invalidates the whole cache
+    entry) -- exactly the case Assign hits every time, so a roster with a
+    few hundred embeddings still saw a very visible ~1.5s hitch on every
+    single label. This instead keeps the previous result in `session_state`
+    and, when only new rows were appended (checked via `min_id`+count rather
+    than assumed), fetches and appends just those. A row deletion (e.g.
+    deleting a student) changes the count without raising `max_id` past
+    what's cached, which is detected below and falls back to a full reload
+    rather than silently drifting out of sync."""
     count, max_id = fingerprint
     cache = st.session_state.setdefault("_training_vectors_cache", {})
-    cache_key = (db_path_str, bucket, classroom_id, dim)
+    cache_key = (db_path_str, bucket, dim)
     cached = cache.get(cache_key)
 
     if cached is not None and cached["count"] == count and cached["max_id"] == max_id:
@@ -433,8 +431,7 @@ def _cached_training_vectors(
     if cached is not None and max_id > cached["max_id"]:
         new_vectors, new_student_ids, new_name_image_ids, new_discarded = (
             embedding.load_training_vectors(
-                Path(db_path_str), bucket=bucket, classroom_id=classroom_id, dim=dim,
-                min_id=cached["max_id"],
+                Path(db_path_str), bucket=bucket, dim=dim, min_id=cached["max_id"],
             )
         )
         if cached["count"] + new_vectors.shape[0] + new_discarded == count:
@@ -450,7 +447,7 @@ def _cached_training_vectors(
             return result
 
     vectors, student_ids, name_image_ids, n_discarded = embedding.load_training_vectors(
-        Path(db_path_str), bucket=bucket, classroom_id=classroom_id, dim=dim
+        Path(db_path_str), bucket=bucket, dim=dim
     )
     cache[cache_key] = {"count": count, "max_id": max_id, "vectors": vectors,
                          "student_ids": student_ids, "name_image_ids": name_image_ids,
@@ -461,25 +458,24 @@ def _cached_training_vectors(
 def render_visualize() -> None:
     st.write(
         "3D t-SNE projection of each student's handwriting-sample embeddings, "
-        "for debugging the name classifier."
+        "for debugging the name classifier. Spans every classroom (issue "
+        "#109): the classifier grading uses is trained on the whole roster "
+        "at once."
     )
-    classroom = _select_classroom("visualize_classroom", allow_create=False)
-    if classroom is None:
-        return
 
     conn = storage.init_db(DB_PATH)
     try:
-        students = storage.list_students(conn, classroom.id)
-        fingerprint = storage.embeddings_fingerprint(conn, classroom.id)
+        students = storage.list_all_students(conn)
+        fingerprint = storage.all_embeddings_fingerprint(conn)
     finally:
         conn.close()
 
     if not students:
-        st.info("No students in this class yet.")
+        st.info("No students yet.")
         return
 
     vectors, student_ids, name_image_ids, discarded = _cached_training_vectors(
-        str(DB_PATH), BUCKET, classroom.id, _embedder_dim(), fingerprint
+        str(DB_PATH), BUCKET, _embedder_dim(), fingerprint
     )
     if discarded:
         st.warning(
@@ -490,7 +486,7 @@ def render_visualize() -> None:
     df = build_scatter_df(vectors, student_ids, name_image_ids, students)
 
     if df.empty:
-        st.info("No handwriting-sample embeddings yet for this class.")
+        st.info("No handwriting-sample embeddings yet.")
         return
 
     fig = px.scatter_3d(
@@ -506,7 +502,7 @@ def render_visualize() -> None:
             "y": False,
             "z": False,
         },
-        title=f"Handwriting embeddings: {classroom.label}",
+        title="Handwriting embeddings: all students",
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -555,23 +551,22 @@ def render_visualize() -> None:
     st.divider()
     st.subheader("Train classifier")
     st.write(
-        "Fit a classifier on this class's handwriting samples and save it, so "
-        "the Grade tab can identify students by their handwriting instead of "
-        "by OCR (issue #58). Retrain after ingesting new name sheets — the "
-        "saved model does not update on its own."
+        "Fit a classifier on every student's handwriting samples, across "
+        "every classroom, and save it (issue #109), so the Grade tab can "
+        "identify students by their handwriting instead of by OCR without "
+        "picking a class first (issue #58). Retrain after ingesting new name "
+        "sheets — the saved model does not update on its own."
     )
     if st.button("Train classifier", key="visualize_train_classifier"):
         with st.spinner("Training..."):
             try:
-                report = name_classifier.train_classroom_classifier(
-                    DB_PATH, BUCKET, classroom.id
-                )
+                report = name_classifier.train_global_classifier(DB_PATH, BUCKET)
             except ValueError as e:
                 st.error(str(e))
                 return
         logger.info(
-            "trained name classifier classroom=%s samples=%d students=%d",
-            classroom.id, report.n_samples, report.n_students,
+            "trained name classifier samples=%d students=%d",
+            report.n_samples, report.n_students,
         )
         st.success(
             f"Trained on {report.n_samples} sample(s) from {report.n_students} "
@@ -931,13 +926,14 @@ def _display_results(result) -> dict:
     }
 
 
-def _classifier_exists(classroom_id: int) -> bool:
-    """Whether a trained handwriting classifier is saved for this class."""
+def _classifier_exists() -> bool:
+    """Whether the trained (global, issue #109) handwriting classifier is
+    saved."""
     if not BUCKET:
         return False
     try:
         storage._default_s3_client().head_object(
-            Bucket=BUCKET, Key=name_classifier.classifier_key(classroom_id)
+            Bucket=BUCKET, Key=name_classifier.GLOBAL_CLASSIFIER_KEY
         )
         return True
     except Exception:  # noqa: BLE001 - a 404 and a credentials failure both mean "can't use it"
@@ -982,19 +978,17 @@ def render_grade() -> None:
         type=["pdf", "jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
-    classroom = _select_classroom("grade_classroom", allow_create=False)
-    roster = []
-    if classroom is not None:
-        conn = storage.init_db(DB_PATH)
-        try:
-            roster = [
-                f"{s.first_name} {s.last_name}".strip()
-                for s in storage.list_students(conn, classroom.id)
-            ]
-        finally:
-            conn.close()
+    # No classroom to pick anymore (issue #109): the roster and the trained
+    # handwriting classifier both span every classroom now.
+    conn = storage.init_db(DB_PATH)
+    try:
+        roster = [
+            f"{s.first_name} {s.last_name}".strip() for s in storage.list_all_students(conn)
+        ]
+    finally:
+        conn.close()
 
-    has_model = classroom is not None and _classifier_exists(classroom.id)
+    has_model = _classifier_exists()
     options = [_CLASSIFIER_NAME_SOURCE, _OCR_NAME_SOURCE]
     name_source = st.selectbox(
         "Read student names with",
@@ -1004,8 +998,8 @@ def render_grade() -> None:
     )
     if not has_model:
         st.caption(
-            "No handwriting classifier has been trained for this class yet — "
-            "train one on the Visualize tab to use it here."
+            "No handwriting classifier has been trained yet — train one on "
+            "the Visualize tab to use it here."
         )
 
     answer_options = [
@@ -1083,18 +1077,15 @@ def render_grade() -> None:
 
     name_reader = None
     if name_source == _CLASSIFIER_NAME_SOURCE:
-        if classroom is None:
-            st.error("Select a class to grade with the handwriting classifier.")
-            return
         try:
-            name_reader = ClassifierNameReader.from_classroom(DB_PATH, classroom.id, BUCKET)
+            name_reader = ClassifierNameReader.from_saved_model(DB_PATH, BUCKET)
         except ValueError as e:
             st.error(str(e))
             return
         if name_reader is None:
             st.error(
-                "No handwriting classifier is saved for this class. Train one on "
-                "the Visualize tab, or switch to OCR above."
+                "No handwriting classifier is saved. Train one on the "
+                "Visualize tab, or switch to OCR above."
             )
             return
 
@@ -1143,7 +1134,6 @@ def render_grade() -> None:
                 name_reader=name_reader,
                 answer_reader=answer_reader,
                 response_scorer=response_scorer,
-                classroom_id=classroom.id if classroom is not None else None,
                 bucket=BUCKET,
             )
             status.update(label="Grading complete", state="complete")

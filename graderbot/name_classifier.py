@@ -26,9 +26,12 @@ from graderbot.embedding import (
     load_training_images,
     load_training_vectors,
 )
-from graderbot.storage import init_db, list_students
+from graderbot.storage import init_db, list_all_students
 
 DEFAULT_CLASSIFIER_KEY = "name_classifier/knn.joblib"
+# The one trained handwriting classifier, spanning every classroom (issue
+# #109) -- grading no longer needs to pick a classroom before it can be used.
+GLOBAL_CLASSIFIER_KEY = "name_classifier/global.joblib"
 _DEFAULT_N_NEIGHBORS = 3
 # LOO-CV cost scales with training-set size on every fold, so an unbounded
 # per-class fold count would make evaluation blow up as a prolific student
@@ -280,12 +283,6 @@ def _default_client(s3_client):
     return storage._default_s3_client()
 
 
-def classifier_key(classroom_id: int) -> str:
-    """S3 key of a classroom's trained name classifier (issue #58). One model
-    per classroom, because the label space *is* that classroom's roster."""
-    return f"name_classifier/{classroom_id}.joblib"
-
-
 def save_classifier(
     classifier: BaseEstimator,
     bucket: str,
@@ -313,15 +310,15 @@ def load_classifier(
 
 @dataclass
 class TrainingReport:
-    """What a `train_classroom_classifier` run actually trained on (issue #58),
-    so the UI can show whether the model is worth grading with."""
+    """What a `train_global_classifier` run actually trained on (issue #58,
+    #109), so the UI can show whether the model is worth grading with."""
 
     n_samples: int
     n_students: int
     s3_url: str
     embedding_dim: int
-    # Vectors in the table for this classroom that some *other* embedder
-    # produced, and so were excluded (see `load_training_vectors`).
+    # Vectors in the table that some *other* embedder produced, and so were
+    # excluded (see `load_training_vectors`).
     discarded_wrong_dim: int = 0
     # Roster members the model can never predict: no handwriting samples at all.
     students_with_no_samples: List[str] = field(default_factory=list)
@@ -330,42 +327,42 @@ class TrainingReport:
     students_with_one_sample: List[str] = field(default_factory=list)
 
 
-def train_classroom_classifier(
+def train_global_classifier(
     db_path: Union[str, Path],
     bucket: str,
-    classroom_id: int,
     embedder: Optional[Embedder] = None,
     n_neighbors: int = _DEFAULT_N_NEIGHBORS,
     classifier_factory: Optional[ClassifierFactory] = None,
     s3_client=None,
 ) -> TrainingReport:
-    """Train one classroom's name classifier and persist it to S3 at
-    `classifier_key(classroom_id)` (issue #58, phase 5).
+    """Train one name classifier over every student across every classroom
+    and persist it to S3 at `GLOBAL_CLASSIFIER_KEY` (issue #58 phase 5,
+    generalized to a single global model in issue #109 so grading no longer
+    needs to pick a classroom first).
 
-    Training data is scoped both to the classroom and to the dimension the
-    *live* embedder produces, so a model is never fitted on a mix of
-    embedders' vectors. Returns a `TrainingReport` describing the fit,
-    including the roster members with too few samples to be recognized
-    reliably."""
+    Training data is scoped to the dimension the *live* embedder produces, so
+    a model is never fitted on a mix of embedders' vectors. Returns a
+    `TrainingReport` describing the fit, including the roster members with
+    too few samples to be recognized reliably."""
     embedder = embedder if embedder is not None else default_embedder()
     dim = embedder.dim
     vectors, student_ids, _, discarded = load_training_vectors(
-        Path(db_path), bucket, s3_client, classroom_id=classroom_id, dim=dim
+        Path(db_path), bucket, s3_client, dim=dim
     )
     if len(vectors) == 0:
         raise ValueError(
-            f"no {dim}-dimensional handwriting embeddings for classroom "
-            f"{classroom_id} ({discarded} vector(s) from a different embedder "
+            f"no {dim}-dimensional handwriting embeddings "
+            f"({discarded} vector(s) from a different embedder "
             "were skipped); ingest name sheets and vectorize them first"
         )
 
     classifier = train_name_classifier(vectors, student_ids, n_neighbors, classifier_factory)
-    url = save_classifier(classifier, bucket, classifier_key(classroom_id), s3_client)
+    url = save_classifier(classifier, bucket, GLOBAL_CLASSIFIER_KEY, s3_client)
 
     counts = Counter(student_ids.tolist())
     conn = init_db(Path(db_path))
     try:
-        students = list_students(conn, classroom_id)
+        students = list_all_students(conn)
     finally:
         conn.close()
     display = {s.id: f"{s.first_name} {s.last_name}".strip() for s in students}

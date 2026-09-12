@@ -31,7 +31,6 @@ def _log_bucket(bucket: Optional[str]) -> Optional[str]:
 def maybe_capture_pending_name_label(
     conn: Connection,
     crop: np.ndarray,
-    classroom_id: int,
     predicted_name: str,
     confidence: float,
     source: str,
@@ -44,6 +43,11 @@ def maybe_capture_pending_name_label(
     id, or `None` for a confident read, a blank crop, a crop already queued
     or already labeled some other way, or no S3 bucket configured. Any S3/DB
     error is warned about and swallowed rather than breaking grading.
+
+    No longer takes a `classroom_id` (issue #109): grading has no "current
+    classroom" once the name classifier is trained on every student at once,
+    so a captured crop is queued unscoped -- the "Label names" tab already
+    assigns against the full roster regardless of classroom (issue #97).
     """
     if confidence >= LOW_CONFIDENCE_THRESHOLD:
         return None
@@ -71,13 +75,12 @@ def maybe_capture_pending_name_label(
             return None
 
         client = s3_client if s3_client is not None else storage._default_s3_client()
-        key = f"pending_name_labels/{classroom_id}/{image_sha256}.png"
+        key = f"pending_name_labels/{image_sha256}.png"
         client.put_object(
             Bucket=resolved_bucket, Key=key, Body=png_bytes, ContentType="image/png"
         )
 
         record = storage.PendingNameLabelRecord(
-            classroom_id=classroom_id,
             image_s3url=f"https://{resolved_bucket}.s3.amazonaws.com/{key}",
             image_sha256=image_sha256,
             predicted_name=predicted_name or None,

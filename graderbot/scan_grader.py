@@ -110,7 +110,6 @@ def _grade_batch(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
-    classroom_id: Optional[int] = None,
     bucket: Optional[str] = None,
     s3_client=None,
 ) -> Tuple[ScanBatchResult, List[_GradedScan]]:
@@ -133,14 +132,16 @@ def _grade_batch(
     candidates instead of transcribing them; see `grade_hw` for how it and
     `answer_reader` split the work.
 
-    `classroom_id` and `bucket` opt into capturing low/no-confidence name-box
-    crops for the "Label names" tab's manual-labelling queue (issue #92):
-    when both are set, every page whose name-read confidence is below
+    `bucket` opts into capturing low/no-confidence name-box crops for the
+    "Label names" tab's manual-labelling queue (issue #92): when set, every
+    page whose name-read confidence is below
     `pending_name_capture.LOW_CONFIDENCE_THRESHOLD` has its name-box crop
     queued as a PENDING_NAME_LABEL row (capture is non-fatal and self-gating
-    -- see `maybe_capture_pending_name_label`). Neither is required for
-    grading itself; leaving `classroom_id` unset (the default) disables
-    capture entirely.
+    -- see `maybe_capture_pending_name_label`). Not required for grading
+    itself; leaving `bucket` unset (the default) disables capture entirely.
+    (Capture used to also require a `classroom_id` -- dropped in issue #109,
+    since grading no longer has a "current classroom" once the name
+    classifier is trained on every student at once.)
 
     `on_step(msg, detail)` receives per-page progress, separating the two ways a
     page becomes "unreadable" -- rectification (ArUco markers not found) versus
@@ -223,12 +224,11 @@ def _grade_batch(
                     source=guess.source,
                 )
             )
-            if classroom_id is not None and name_box is not None:
+            if bucket is not None and name_box is not None:
                 crop = _crop_box(image, name_box, _BOX_INSET)
                 maybe_capture_pending_name_label(
                     conn,
                     crop,
-                    classroom_id,
                     guess.name,
                     guess.confidence,
                     guess.source,
@@ -269,7 +269,6 @@ def grade_scans(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
-    classroom_id: Optional[int] = None,
     bucket: Optional[str] = None,
     s3_client=None,
 ) -> ScanBatchResult:
@@ -278,10 +277,10 @@ def grade_scans(
     `roster` by OCR unless `name_reader` overrides that; answer boxes are read
     by Mathpix unless `answer_reader` overrides that (see `_grade_batch`).
     `response_scorer` optionally verifies plain-numeric answers instead
-    (issue #81, see `grade_hw`). `classroom_id`/`bucket` optionally capture
-    low/no-confidence name-box crops for manual labelling (issue #92, see
-    `_grade_batch`). `on_step` streams per-page progress. See
-    `ScanBatchResult` for the return shape."""
+    (issue #81, see `grade_hw`). `bucket` optionally captures low/no-confidence
+    name-box crops for manual labelling (issue #92, see `_grade_batch`).
+    `on_step` streams per-page progress. See `ScanBatchResult` for the return
+    shape."""
     conn = init_db(Path(db_path))
     try:
         result, _ = _grade_batch(
@@ -292,7 +291,6 @@ def grade_scans(
             name_reader=name_reader,
             answer_reader=answer_reader,
             response_scorer=response_scorer,
-            classroom_id=classroom_id,
             bucket=bucket,
             s3_client=s3_client,
         )
@@ -325,7 +323,6 @@ def mark_scan(
     name_reader: Optional[NameReader] = None,
     answer_reader: Optional[AnswerReader] = None,
     response_scorer: Optional[ResponseScorer] = None,
-    classroom_id: Optional[int] = None,
     bucket: Optional[str] = None,
     s3_client=None,
 ) -> ScanBatchResult:
@@ -345,7 +342,6 @@ def mark_scan(
             name_reader=name_reader,
             answer_reader=answer_reader,
             response_scorer=response_scorer,
-            classroom_id=classroom_id,
             bucket=bucket,
             s3_client=s3_client,
         )
