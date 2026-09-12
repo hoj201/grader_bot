@@ -93,6 +93,36 @@ def test_train_name_classifier_uses_custom_classifier_factory():
     assert clf.predict(zeke_like)[0] == "Zeke"
 
 
+def test_default_classifier_factory_weights_by_distance_for_imbalanced_classes():
+    """A lone sample from a low-count student should still win its own close
+    neighborhood instead of being outvoted by a numerous but farther-away
+    student's points (class-imbalance mitigation, issue: new-student data
+    imbalance)."""
+    # Anna: a single sample far out along axis 0.
+    anna = np.array([[10.0, 0, 0, 0, 0, 0, 0, 0]], dtype=np.float32)
+    # Zeke: ten samples densely spaced from 0.0 to 9.0 along the same axis --
+    # individually farther from the query than Anna's one sample, but there
+    # are enough of them nearby to outvote Anna under uniform k=3 voting.
+    zeke = np.array([[float(x), 0, 0, 0, 0, 0, 0, 0] for x in range(10)], dtype=np.float32)
+    vectors = np.vstack([anna, zeke])
+    labels = np.array(["Anna"] + ["Zeke"] * 10)
+    query = np.array([[9.9, 0, 0, 0, 0, 0, 0, 0]], dtype=np.float32)
+
+    # Uniform voting picks Zeke: among the 3 nearest neighbors (Anna at
+    # distance 0.1, Zeke's closest two at 0.9 and 1.9), Zeke has the majority.
+    uniform_clf = train_name_classifier(
+        vectors,
+        labels,
+        classifier_factory=lambda n: KNeighborsClassifier(n_neighbors=min(3, n)),
+    )
+    assert uniform_clf.predict(query)[0] == "Zeke"
+
+    # The default factory weights those same 3 neighbors by inverse distance,
+    # so Anna's much-closer single sample outweighs Zeke's two farther ones.
+    clf = train_name_classifier(vectors, labels)
+    assert clf.predict(query)[0] == "Anna"
+
+
 def test_logistic_regression_factory_builds_regularized_model():
     factory = logistic_regression_factory(C=0.05, max_iter=500)
     model = factory(n_samples=10)
