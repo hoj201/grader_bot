@@ -13,6 +13,7 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from sqlite3 import Connection, connect
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
@@ -872,12 +873,23 @@ def slugify_title(title: str) -> str:
     return slug or "worksheet"
 
 
+@lru_cache(maxsize=1)
 def _default_s3_client():
     """boto3 only reads AWS_DEFAULT_REGION automatically, not AWS_REGION
     (which is what this repo's .env and README use) - so an unset region
     silently falls back to us-east-1. If the bucket lives elsewhere,
     presigned URLs get signed for the wrong region's endpoint and S3
-    rejects them. Pass AWS_REGION through explicitly to avoid that."""
+    rejects them. Pass AWS_REGION through explicitly to avoid that.
+
+    Cached (issue: Label Names tab slowness) -- this used to construct a
+    fresh boto3 client on every call, and Streamlit reruns every tab's code
+    on any widget interaction anywhere in the app (not just the tab you're
+    looking at). The Gallery tab alone calls this up to 3x per worksheet for
+    presigned PDF links, so with dozens of worksheets that added up to a
+    real, visible per-click delay -- on every click, not just Gallery's own.
+    A single client is safe to reuse: boto3 clients are thread-safe (already
+    relied on by embedding._download_many's thread pool) and internally
+    refresh their own credentials, so there's no reason to rebuild one."""
     return boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
 
 

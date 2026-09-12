@@ -439,6 +439,10 @@ def test_default_s3_client_uses_aws_region_env_var(monkeypatch):
     monkeypatch.setenv("AWS_REGION", "us-east-2")
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
 
+    # _default_s3_client is process-wide @lru_cache'd (issue: Label Names tab
+    # slowness -- a fresh client per call was the dominant per-click cost);
+    # the autouse fixture in conftest.py clears it around every test so a
+    # stale client can't hide this env var actually being read.
     client = _default_s3_client()
 
     assert client.meta.region_name == "us-east-2"
