@@ -9,9 +9,11 @@ from moto import mock_aws
 from graderbot import scan_grader
 from graderbot.models import Box, QuestionResult
 from graderbot.name_reader import CLASSIFIER_SOURCE, OCR_SOURCE, NameGuess
-from graderbot.scan_grader import grade_scans, mark_scan, results_by_student
+from graderbot.scan_grader import grade_scans, mark_scan, participation_report, results_by_student
 from graderbot.storage import (
     count_all_pending_name_labels,
+    get_or_create_classroom,
+    get_or_create_student,
     init_db,
     insert_worksheet,
     random_pending_name_label_any,
@@ -246,6 +248,96 @@ def test_results_by_student_transposes_to_display_shape(db_with_two_worksheets, 
         "q2": QuestionResult(answer="4", response="4", correct=True),
     }
     assert set(by_student["Carol White"]) == {"ws_2"}
+
+
+# --------------------------------------------------------------------------
+# Participation report (issue #107)
+
+
+def test_participation_report_groups_by_worksheet_and_classroom(
+    db_with_two_worksheets, patched_cv
+):
+    conn = init_db(db_with_two_worksheets)
+    period_1 = get_or_create_classroom(conn, "Period 1")
+    period_2 = get_or_create_classroom(conn, "Period 2")
+    get_or_create_student(conn, period_1.id, "Alice", "Smith")
+    get_or_create_student(conn, period_1.id, "Bob", "Jones")
+    get_or_create_student(conn, period_2.id, "Carol", "White")
+    conn.close()
+
+    result = grade_scans(
+        ["alice.png", "bob.png", "carol.png"],
+        roster=["Alice Smith", "Bob Jones", "Carol White"],
+        db_path=db_with_two_worksheets,
+    )
+
+    conn = init_db(db_with_two_worksheets)
+    report = participation_report(result, conn)
+    conn.close()
+
+    # Sorted alphabetically by last name: Jones before Smith.
+    assert report["ws_1"] == {"title": None, "Period 1": ["Bob Jones", "Alice Smith"]}
+    assert report["ws_2"] == {"title": None, "Period 2": ["Carol White"]}
+
+
+def test_participation_report_drops_names_with_no_matching_student(
+    db_with_two_worksheets, patched_cv
+):
+    conn = init_db(db_with_two_worksheets)
+    period_1 = get_or_create_classroom(conn, "Period 1")
+    get_or_create_student(conn, period_1.id, "Alice", "Smith")
+    # Bob is never enrolled -- e.g. an OCR misread that happened to match
+    # the roster string passed to grade_scans but not an actual student row.
+    conn.close()
+
+    result = grade_scans(
+        ["alice.png", "bob.png"],
+        roster=["Alice Smith", "Bob Jones"],
+        db_path=db_with_two_worksheets,
+    )
+
+    conn = init_db(db_with_two_worksheets)
+    report = participation_report(result, conn)
+    conn.close()
+
+    assert report["ws_1"] == {"title": None, "Period 1": ["Alice Smith"]}
+
+
+def test_participation_report_includes_worksheet_title(tmp_path, patched_cv):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = init_db(db_path)
+    boxes = serialize_boxes(
+        {
+            "name": Box(0.1, 0.9, 0.4, 0.05),
+            "q1": Box(0.1, 0.5, 0.3, 0.05),
+            "q2": Box(0.1, 0.4, 0.3, 0.05),
+        }
+    )
+    insert_worksheet(
+        conn,
+        _sample_record(
+            public_id="ws_1",
+            title="Bell ringer Aug 22",
+            boxes_json=boxes,
+            questions_json=json.dumps(
+                [
+                    {"id": "q1", "text": "1+1", "answer": "2"},
+                    {"id": "q2", "text": "2+2", "answer": "4"},
+                ]
+            ),
+        ),
+    )
+    classroom = get_or_create_classroom(conn, "Period 1")
+    get_or_create_student(conn, classroom.id, "Alice", "Smith")
+    conn.close()
+
+    result = grade_scans(["alice.png"], roster=["Alice Smith"], db_path=db_path)
+
+    conn = init_db(db_path)
+    report = participation_report(result, conn)
+    conn.close()
+
+    assert report["ws_1"]["title"] == "Bell ringer Aug 22"
 
 
 def test_grade_scans_reports_progress_via_on_step(db_with_two_worksheets, patched_cv):
