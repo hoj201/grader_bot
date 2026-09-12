@@ -50,6 +50,7 @@ from graderbot.storage import (
     random_pending_name_label,
     random_pending_name_label_any,
     record_sty_version,
+    roster_needs_more_name_images,
     serialize_boxes,
     slugify_title,
     store_worksheet,
@@ -1326,6 +1327,64 @@ def test_list_unembedded_name_images_excludes_embedded(tmp_path):
     )
 
     assert list_unembedded_name_images(conn) == []
+
+
+def _add_name_images(conn, student, count):
+    for i in range(count):
+        insert_name_image(
+            conn,
+            NameImageRecord(
+                student_id=student.id,
+                box_id=f"name{i}",
+                image_s3url=f"https://bucket.s3.amazonaws.com/img{i}.png",
+                image_sha256=f"sha{student.id}-{i}",
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def test_roster_needs_more_name_images_true_for_a_student_with_zero(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    get_or_create_student(conn, classroom.id, "Anna", "Smith")
+
+    assert roster_needs_more_name_images(conn, 5)
+
+
+def test_roster_needs_more_name_images_true_when_below_quota(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    _add_name_images(conn, student, 4)
+
+    assert roster_needs_more_name_images(conn, 5)
+
+
+def test_roster_needs_more_name_images_false_once_every_student_meets_quota(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    classroom = get_or_create_classroom(conn, "Room 101")
+    student = get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    _add_name_images(conn, student, 5)
+
+    assert not roster_needs_more_name_images(conn, 5)
+
+
+def test_roster_needs_more_name_images_checks_every_classroom(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+    room_a = get_or_create_classroom(conn, "Room 101")
+    room_b = get_or_create_classroom(conn, "Room 102")
+    caught_up = get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    _add_name_images(conn, caught_up, 5)
+    get_or_create_student(conn, room_b.id, "Ben", "Jones")
+
+    # Room 102's student still has zero images, even though room 101 is done.
+    assert roster_needs_more_name_images(conn, 5)
+
+
+def test_roster_needs_more_name_images_false_with_no_students(tmp_path):
+    conn = init_db(tmp_path / "worksheets.sqlite3")
+
+    assert not roster_needs_more_name_images(conn, 5)
 
 
 # --------------------------------------------------------------------------

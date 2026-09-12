@@ -4,6 +4,14 @@ turning them into (image, student_name) pairs that feed the handwriting
 classifier's training data). Self-gating and non-fatal by design, mirroring
 `mathpix_log.py`: grading must never fail, or even slow down noticeably,
 because a labelling capture failed.
+
+Confidence-gated capture assumes the classifier already knows every
+student -- otherwise a student it has never seen just gets confidently (or
+not) mapped onto whichever known student their handwriting looks closest
+to, and their crops never trip the low-confidence check that would queue
+them for labelling. So until every student has `MIN_NAME_IMAGES_PER_STUDENT`
+labelled samples, capture ignores confidence and queues every non-blank
+crop uniformly at random -- i.e. every crop it sees (issue #110).
 """
 
 import hashlib
@@ -23,6 +31,10 @@ from graderbot.imaging import is_blank
 # (_LOW_CONFIDENCE).
 LOW_CONFIDENCE_THRESHOLD = 0.5
 
+# Every student needs at least this many labelled NAME_IMAGES before capture
+# trusts classifier confidence to decide what's worth labelling (issue #110).
+MIN_NAME_IMAGES_PER_STUDENT = 5
+
 
 def _log_bucket(bucket: Optional[str]) -> Optional[str]:
     return bucket or os.environ.get("S3_BUCKET")
@@ -39,18 +51,20 @@ def maybe_capture_pending_name_label(
 ) -> Optional[int]:
     """Queues `crop` (an already-cropped RGB name box, e.g. from
     `_crop_box(image, name_box, _BOX_INSET)`) as a PENDING_NAME_LABEL row if
-    `confidence` is below `LOW_CONFIDENCE_THRESHOLD`. Returns the new row
-    id, or `None` for a confident read, a blank crop, a crop already queued
-    or already labeled some other way, or no S3 bucket configured. Any S3/DB
-    error is warned about and swallowed rather than breaking grading.
+    `confidence` is below `LOW_CONFIDENCE_THRESHOLD` -- unless some student
+    still has fewer than `MIN_NAME_IMAGES_PER_STUDENT` labelled NAME_IMAGES
+    (see `storage.roster_needs_more_name_images`, issue #110), in which case
+    confidence is ignored and every crop is captured. Returns the new row
+    id, or `None` for a confident read once the roster is bootstrapped, a
+    blank crop, a crop already queued or already labeled some other way, or
+    no S3 bucket configured. Any S3/DB error is warned about and swallowed
+    rather than breaking grading.
 
     No longer takes a `classroom_id` (issue #109): grading has no "current
     classroom" once the name classifier is trained on every student at once,
     so a captured crop is queued unscoped -- the "Label names" tab already
     assigns against the full roster regardless of classroom (issue #97).
     """
-    if confidence >= LOW_CONFIDENCE_THRESHOLD:
-        return None
     if crop.size == 0 or is_blank(crop):
         return None
 
@@ -60,6 +74,11 @@ def maybe_capture_pending_name_label(
 
     try:
         from graderbot import storage
+
+        if confidence >= LOW_CONFIDENCE_THRESHOLD and not storage.roster_needs_more_name_images(
+            conn, MIN_NAME_IMAGES_PER_STUDENT
+        ):
+            return None
 
         ok, encoded = cv2.imencode(".png", cv2.cvtColor(crop, cv2.COLOR_RGB2BGR))
         if not ok:
