@@ -329,6 +329,19 @@ def render_roster() -> None:
                             )
                             st.session_state.pop(transfer_confirm_key, None)
                             st.session_state.pop(transfer_target_key, None)
+                            # The trained name classifier is a separate saved
+                            # artifact per classroom (issue #58) that doesn't
+                            # update on its own -- a transfer changes both
+                            # rosters, so nudge retraining explicitly instead
+                            # of leaving it to the README (issue #104).
+                            st.session_state["roster_flash"] = [(
+                                "warning",
+                                f"Transferred {label} to {target.label}. The "
+                                f"name classifier for {classroom.label} and "
+                                f"{target.label} was trained on the old "
+                                "rosters -- retrain both from the Visualize "
+                                "tab before relying on it.",
+                            )]
                             st.rerun()
                     if no.button("Cancel", key=f"cancel_transfer_student_{student.id}",
                                  use_container_width=True):

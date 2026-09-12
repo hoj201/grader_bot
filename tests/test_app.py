@@ -850,6 +850,32 @@ def test_roster_tab_transfer_student_shows_error_on_name_collision(tmp_path, mon
 
 
 @pytest.mark.slow
+def test_roster_tab_transfer_student_warns_to_retrain_classifiers(tmp_path, monkeypatch):
+    """issue #104: a transfer changes both classrooms' rosters, so the
+    per-classroom trained classifier (a separate saved artifact, issue #58)
+    is now stale for both -- nudge the user to retrain instead of leaving it
+    to the README."""
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    room_a = storage.get_or_create_classroom(conn, "Room A")
+    room_b = storage.get_or_create_classroom(conn, "Room B")
+    storage.get_or_create_student(conn, room_a.id, "Anna", "Smith")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.session_state["active_tab"] = "Roster"
+    at.run()
+    next(b for b in at.button if b.label == "Transfer").click().run()
+    next(b for b in at.button if b.label == "Confirm").click().run()
+
+    assert not at.exception
+    warnings = " ".join(w.value for w in at.warning)
+    assert "Room A" in warnings and "Room B" in warnings
+    assert "retrain" in warnings.lower()
+
+
+@pytest.mark.slow
 def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
