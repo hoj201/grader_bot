@@ -1062,7 +1062,7 @@ def test_transfer_student_changes_embeddings_fingerprint_of_both_classrooms(tmp_
     """issue #104: `embeddings_fingerprint` joins NAME_EMBEDDINGS through the
     student's *current* classroom_id, so a transferred student's samples
     should immediately count toward the destination classroom's fingerprint
-    and drop out of the source's -- this is what lets the Visualize tab's
+    and drop out of the source's -- this is what lets the Name Classifier tab's
     cache (`app._cached_training_vectors`) notice a transfer and reload
     instead of serving stale vectors under the old classroom."""
     conn = init_db(tmp_path / "worksheets.sqlite3")

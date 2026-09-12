@@ -404,7 +404,7 @@ def _cached_training_vectors(
     """Incrementally-cached `embedding.load_training_vectors`, keyed (in
     part) on `fingerprint` -- `storage.all_embeddings_fingerprint`'s
     `(count, max_id)` across every student (issue #109: the classifier and
-    this Visualize tab both stopped being scoped to one classroom).
+    this Name Classifier tab both stopped being scoped to one classroom).
 
     Streamlit reruns every tab's code top-to-bottom on *any* widget
     interaction anywhere in the app, not just the tab you're looking at
@@ -456,12 +456,11 @@ def _cached_training_vectors(
     return vectors, student_ids, name_image_ids, n_discarded
 
 
-def render_visualize() -> None:
+def render_name_classifier() -> None:
     st.write(
-        "3D t-SNE projection of each student's handwriting-sample embeddings, "
-        "for debugging the name classifier. Spans every classroom (issue "
-        "#109): the classifier grading uses is trained on the whole roster "
-        "at once."
+        "Inspect, cross-validate, and train the handwriting name classifier. "
+        "Spans every classroom (issue #109): the classifier grading uses is "
+        "trained on the whole roster at once."
     )
 
     conn = storage.init_db(DB_PATH)
@@ -484,28 +483,38 @@ def render_visualize() -> None:
             "Delete and re-ingest those students to re-vectorize them with the "
             "current one."
         )
-    df = build_scatter_df(vectors, student_ids, name_image_ids, students)
 
-    if df.empty:
-        st.info("No handwriting-sample embeddings yet.")
-        return
-
-    fig = px.scatter_3d(
-        df,
-        x="x",
-        y="y",
-        z="z",
-        color="student_name",
-        hover_data={
-            "name_image_id": True,
-            "student_name": True,
-            "x": False,
-            "y": False,
-            "z": False,
-        },
-        title="Handwriting embeddings: all students",
+    st.subheader("3D embedding visualization")
+    st.write(
+        "3D t-SNE projection of each student's handwriting-sample embeddings, "
+        "for debugging the name classifier. Expensive to compute for a large "
+        "roster, so it's not loaded automatically (issue #113) -- press the "
+        "button below to run it."
     )
-    st.plotly_chart(fig, use_container_width=True)
+    if st.button("Load 3D visualization", key="name_classifier_load_tsne"):
+        st.session_state["_name_classifier_tsne_loaded"] = True
+
+    if st.session_state.get("_name_classifier_tsne_loaded"):
+        df = build_scatter_df(vectors, student_ids, name_image_ids, students)
+        if df.empty:
+            st.info("No handwriting-sample embeddings yet.")
+        else:
+            fig = px.scatter_3d(
+                df,
+                x="x",
+                y="y",
+                z="z",
+                color="student_name",
+                hover_data={
+                    "name_image_id": True,
+                    "student_name": True,
+                    "x": False,
+                    "y": False,
+                    "z": False,
+                },
+                title="Handwriting embeddings: all students",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
     st.subheader("Classifier accuracy")
@@ -988,7 +997,7 @@ def render_grade() -> None:
     if not has_model:
         st.caption(
             "No handwriting classifier has been trained yet — train one on "
-            "the Visualize tab to use it here."
+            "the Name Classifier tab to use it here."
         )
 
     answer_options = [
@@ -1074,7 +1083,7 @@ def render_grade() -> None:
         if name_reader is None:
             st.error(
                 "No handwriting classifier is saved. Train one on the "
-                "Visualize tab, or switch to OCR above."
+                "Name Classifier tab, or switch to OCR above."
             )
             return
 
@@ -1219,7 +1228,7 @@ def render_label_names() -> None:
     any student. Confirming one adds it straight to the handwriting
     classifier's training data (the same NAME_IMAGES table
     `ingest_name_sheets` writes to) and embeds it immediately, so it's
-    ready to use the next time the Visualize tab retrains. Tasks are
+    ready to use the next time the Name Classifier tab retrains. Tasks are
     served one at a time, by default chosen uniformly at random across the
     whole queue (issue #92's "for the moment" scope) -- which, during
     issue #110's roster-wide bootstrap capture, can bury a single
@@ -1233,7 +1242,7 @@ def render_label_names() -> None:
         "Grading a scan sometimes reads a student's name with low or no "
         "confidence; those name-box crops are queued here for a quick "
         "manual check. Confirming one adds it straight to the handwriting "
-        "classifier's training data -- retrain on the Visualize tab "
+        "classifier's training data -- retrain on the Name Classifier tab "
         "afterwards to put it to use."
     )
 
@@ -1446,13 +1455,13 @@ def main() -> None:
     # interaction anywhere in the app. That's what made Label Names feel
     # slow no matter how much caching went into the other tabs: clicking
     # "Assign" there still paid for Gallery generating presigned URLs for
-    # every worksheet, Visualize rebuilding its 3D scatter plot, etc. every
-    # single time. st.segmented_control (unlike st.tabs) is just a normal
-    # widget -- its value lives in session_state like any other -- so an
-    # if/elif on it lets only the *active* tab's render_*() actually run.
+    # every worksheet, Name Classifier rebuilding its 3D scatter plot, etc.
+    # every single time. st.segmented_control (unlike st.tabs) is just a
+    # normal widget -- its value lives in session_state like any other -- so
+    # an if/elif on it lets only the *active* tab's render_*() actually run.
     tab_names = [
-        "Gallery", "Create", "Grade", "Name sheets", "Roster", "Visualize",
-        "Label Names",
+        "Gallery", "Create", "Grade", "Name sheets", "Roster",
+        "Name Classifier", "Label Names",
     ]
     active_tab = st.segmented_control(
         "Navigation", tab_names, default=tab_names[0], required=True,
@@ -1470,8 +1479,8 @@ def main() -> None:
         render_name_sheets()
     elif active_tab == "Roster":
         render_roster()
-    elif active_tab == "Visualize":
-        render_visualize()
+    elif active_tab == "Name Classifier":
+        render_name_classifier()
     elif active_tab == "Label Names":
         render_label_names()
 

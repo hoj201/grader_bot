@@ -381,7 +381,7 @@ def _download_vector(embedding_s3url: str, client) -> np.ndarray:
 # (and uploads) fan out across a small thread pool instead of going one
 # round-trip at a time -- `load_training_vectors`, `load_training_images` and
 # `vectorize_samples` used to serially download one object per handwriting
-# sample, which is the dominant cost of the Visualize tab (and, since it runs
+# sample, which is the dominant cost of the Name Classifier tab (and, since it runs
 # on every Streamlit rerun regardless of which tab is on screen, of *every*
 # button click anywhere in the app) once a classroom has more than a
 # handful of samples.
@@ -425,7 +425,7 @@ def load_training_vectors(
     With `dim=None` nothing is filtered and a mixed collection still raises.
 
     `min_id` restricts to rows with `NAME_EMBEDDINGS.id > min_id`, so a caller
-    that already has every row up to some id (the Visualize tab's incremental
+    that already has every row up to some id (the Name Classifier tab's incremental
     cache, keyed on `storage.embeddings_fingerprint`) can fetch only what's
     new instead of re-downloading the whole classroom from S3 every time."""
     bucket = _resolve_bucket(bucket)

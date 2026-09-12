@@ -706,7 +706,7 @@ def insert_name_embedding(conn: Connection, record: NameEmbeddingRecord) -> int:
 def embeddings_fingerprint(conn: Connection, classroom_id: int) -> Tuple[int, int]:
     """`(count, max_id)` of a classroom's NAME_EMBEDDINGS rows -- cheap,
     local-only stand-in for "has this classroom's embedding collection
-    changed since I last looked", so a caller (the Visualize tab's
+    changed since I last looked", so a caller (the Name Classifier tab's
     `st.cache_data`) can skip re-downloading every vector from S3 on every
     Streamlit rerun unless a new embedding actually landed."""
     row = conn.execute(
@@ -723,7 +723,7 @@ def embeddings_fingerprint(conn: Connection, classroom_id: int) -> Tuple[int, in
 def all_embeddings_fingerprint(conn: Connection) -> Tuple[int, int]:
     """`(count, max_id)` across every NAME_EMBEDDINGS row, regardless of
     classroom -- the global-classifier counterpart of `embeddings_fingerprint`
-    (issue #109), used by the Visualize tab's incremental cache now that it
+    (issue #109), used by the Name Classifier tab's incremental cache now that it
     inspects every student's embeddings at once instead of one classroom's."""
     row = conn.execute(
         "SELECT COUNT(*), COALESCE(MAX(id), 0) FROM NAME_EMBEDDINGS"

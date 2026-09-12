@@ -949,6 +949,41 @@ def test_label_names_tab_filter_narrows_to_predicted_student(tmp_path, monkeypat
 
 
 @pytest.mark.slow
+def test_name_classifier_tab_tsne_not_loaded_until_button_clicked(tmp_path, monkeypatch):
+    db_path = tmp_path / "worksheets.sqlite3"
+    conn = storage.init_db(db_path)
+    classroom = storage.get_or_create_classroom(conn, "Room 101")
+    anna = storage.get_or_create_student(conn, classroom.id, "Anna", "Smith")
+    conn.close()
+    _set_env(monkeypatch, db_path)
+
+    rng = np.random.default_rng(0)
+    vectors = rng.normal(size=(3, 4)).astype(np.float32)
+    student_ids = np.array([anna.id] * 3)
+    name_image_ids = np.array([1, 2, 3])
+    monkeypatch.setattr(
+        "graderbot.embedding.load_training_vectors",
+        lambda *args, **kwargs: (vectors, student_ids, name_image_ids, 0),
+    )
+    at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
+    at.session_state["active_tab"] = "Name Classifier"
+    at.run()
+
+    assert not at.exception
+    # The t-SNE projection (issue #113) shouldn't run, or render, until asked
+    # for -- it's expensive on a large roster.
+    assert "_name_classifier_tsne_loaded" not in at.session_state
+    infos = " ".join(i.value for i in at.info)
+    assert "No handwriting-sample embeddings yet." not in infos
+
+    button = next(b for b in at.button if b.label == "Load 3D visualization")
+    button.click().run()
+
+    assert not at.exception
+    assert at.session_state["_name_classifier_tsne_loaded"]
+
+
+@pytest.mark.slow
 def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path, monkeypatch):
     db_path = tmp_path / "worksheets.sqlite3"
     conn = storage.init_db(db_path)
@@ -977,7 +1012,7 @@ def test_visualize_tab_evaluate_classifier_shows_accuracy_and_confusion(tmp_path
     )
 
     at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.session_state["active_tab"] = "Visualize"
+    at.session_state["active_tab"] = "Name Classifier"
     at.run()
     button = next(b for b in at.button if b.label == "Evaluate classifier")
     button.click().run()
@@ -1054,7 +1089,7 @@ def test_visualize_tab_train_classifier_reports_the_fit(tmp_path, monkeypatch):
     )
 
     at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.session_state["active_tab"] = "Visualize"
+    at.session_state["active_tab"] = "Name Classifier"
     at.run()
     next(b for b in at.button if b.label == "Train classifier").click().run()
 
@@ -1086,7 +1121,7 @@ def test_visualize_tab_train_classifier_surfaces_missing_data(tmp_path, monkeypa
     )
 
     at = AppTest.from_file(APP_PATH, default_timeout=APP_TEST_TIMEOUT)
-    at.session_state["active_tab"] = "Visualize"
+    at.session_state["active_tab"] = "Name Classifier"
     at.run()
     next(b for b in at.button if b.label == "Train classifier").click().run()
 

@@ -327,18 +327,21 @@ or by recognizing their handwriting. The handwriting path (issue #2) runs
 end to end through the Streamlit app. Classrooms are still how the **Roster**
 and **Name sheets** tabs organize students for ingest, but the trained
 classifier itself is a single model spanning every classroom (issue #109) —
-grading and the **Visualize** tab no longer ask which class you're working
-with:
+grading and the **Name Classifier** tab no longer ask which class you're
+working with:
 
 1. **Name sheets** tab — print one name-collection page per student.
 2. **Roster** tab — upload the scanned sheets. `ingest_name_sheets` crops each
    handwriting sample to S3 + the `NAME_IMAGES` table, then `vectorize_samples`
    embeds each crop into `NAME_EMBEDDINGS`.
-3. **Visualize** tab — "Evaluate classifier" runs leave-one-out
+3. **Name Classifier** tab — "Evaluate classifier" runs leave-one-out
    cross-validation over every student across every classroom (worth checking
    before trusting it), and "Train classifier" fits one model on all of them
    and saves it to `name_classifier/global.joblib` in S3. **Retrain after
    ingesting new name sheets** — the saved model does not update on its own.
+   A 3D t-SNE projection of every student's handwriting embeddings is also
+   available for debugging the classifier, behind a "Load 3D visualization"
+   button (issue #113) since it's expensive to compute for a large roster.
 4. **Grade** tab — the "Read student names with" dropdown picks between the
    trained classifier and OCR for that run, and the results table shows which
    name was read off each page and how confident the reader was, so a doubtful
@@ -383,8 +386,8 @@ NAME_EMBEDDER=voyage   # optional; `voyage` (default) or `local`
 ```
 
 Embedders produce different-sized vectors (Voyage 1024, `LocalEmbedder` 4096),
-and a stored vector records no embedder of its own. Training and the Visualize
-tab therefore keep only the vectors matching the *current* embedder's
+and a stored vector records no embedder of its own. Training and the Name
+Classifier tab therefore keep only the vectors matching the *current* embedder's
 dimension and report how many they skipped — so switching `NAME_EMBEDDER`
 without re-ingesting silently shrinks the training set rather than mixing
 incompatible vectors.
@@ -399,8 +402,8 @@ it auto-graded; **Name sheets**, to paste a class roster (one name per line)
 and download a printable PDF of name-collection worksheets — one page per
 student (see [name_worksheets.py](./graderbot/name_worksheets.py) and issue #45);
 **Roster**, to ingest those sheets back in and manage a class's students;
-**Visualize**, to inspect, cross-validate, and train the handwriting name
-classifier (see above); and **Label Names**, to manually assign a student to
+**Name Classifier**, to inspect, cross-validate, and train the handwriting
+name classifier (see above); and **Label Names**, to manually assign a student to
 the low/no-confidence name crops grading queues up (issue #92, see above).
 Each graded page's QR code is matched to its stored
 worksheet, graded
