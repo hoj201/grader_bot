@@ -23,8 +23,13 @@ _MATHPIX_TEXT_URL = "https://api.mathpix.com/v3/text"
 # Fraction of the box's own width/height to inset the crop by, so the drawn
 # border itself is excluded. Including the border causes Mathpix to read the
 # box as an empty "checkbox" placeholder (`\square`) instead of OCR'ing its
-# contents.
-_BOX_INSET = 0.08
+# contents. Lowered from 0.08 (issue: Label Names tab crops looked
+# over-cropped -- the name box is only 0.6in tall, so 8% inset per side was
+# eating a visible fraction of the handwriting's vertical room). 0.02 still
+# clears the border stroke (see `crop_box_content_aware`'s own
+# `_BORDER_MARGIN_PX` measurement of a ~2px solid rule) while leaving far
+# more of the box's own content visible.
+_BOX_INSET = 0.02
 _MATH_DELIMITER_PATTERN = re.compile(
     r"^\s*(?:\$\$|\$|\\\(|\\\[)(.*?)(?:\$\$|\$|\\\)|\\\])\s*$", re.DOTALL
 )
